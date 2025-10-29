@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">BleRemoteControl</string>
+    <string name="connect_status">Status: %1$s</string>
 </resources>
