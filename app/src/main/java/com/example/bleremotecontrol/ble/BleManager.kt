@@ -115,17 +115,14 @@ class BleManager(
 
     @SuppressLint("MissingPermission")
     private fun connect(device: BluetoothDevice) {
-        gatt = if (Build.VERSION.SDK_INT >= 31) {
+        gatt =
             device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
-        } else {
-            device.connectGatt(context, false, gattCallback)
-        }
     }
 
     // Public API: queue a secure command
     fun sendSecureCommand(commandBytes: ByteArray, hmacKeyHex: String) {
         val key = HmacTools.hexToBytes(hmacKeyHex)
-        if (key == null || key.isEmpty()) {
+        if (key.isEmpty()) {
             onError("HMAC key not configured")
             return
         }
