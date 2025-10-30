@@ -14,18 +14,18 @@
 
     <Button
         android:id="@+id/btnOpen"
-        android:text="CmdCopen"
+        android:text="Open"
         android:enabled="false"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="80dp"
         android:layout_marginTop="16dp" />
 
     <Button
         android:id="@+id/btnClose"
-        android:text="CmdCloe"
+        android:text="Close"
         android:enabled="false"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="80dp"
         android:layout_marginTop="8dp" />
 
     <Button

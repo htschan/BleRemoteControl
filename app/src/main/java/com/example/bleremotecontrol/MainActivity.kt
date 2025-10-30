@@ -55,7 +55,7 @@ class MainActivity : ComponentActivity() {
             onError = { msg -> runOnUiThread { tvStatus.text = "Status: $msg" } }
         )
 
-        btnOpen.setOnClickListener { queueCommand("CmdCopen") }
+        btnOpen.setOnClickListener { queueCommand("CmdOpen") }
         btnClose.setOnClickListener { queueCommand("CmdClose") }
 
         btnRescan.setOnClickListener {
