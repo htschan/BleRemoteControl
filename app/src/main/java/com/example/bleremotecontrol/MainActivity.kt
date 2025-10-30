@@ -30,6 +30,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
 
         // Quick sanity: BLE available?
         val btMgr = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
@@ -55,8 +56,8 @@ class MainActivity : ComponentActivity() {
             onError = { msg -> runOnUiThread { tvStatus.text = "Status: $msg" } }
         )
 
-        btnOpen.setOnClickListener { queueCommand("CmdOpen") }
-        btnClose.setOnClickListener { queueCommand("CmdClose") }
+        btnOpen.setOnClickListener { bleManager.sendSingleFrameCommand("CmdOpen") }
+        btnClose.setOnClickListener { bleManager.sendSingleFrameCommand("CmdClose") }
 
         btnRescan.setOnClickListener {
             bleManager.stop()
@@ -87,14 +88,6 @@ class MainActivity : ComponentActivity() {
     private fun maybeStart() {
         tvStatus.text = "Status: Scanning…"
         bleManager.start()
-    }
-
-    private fun queueCommand(cmd: String) {
-        // BleManager will combine: [cmd] + [nonce] + [HMAC(cmd||nonce)] into three writes
-        bleManager.sendSecureCommand(
-            commandBytes = cmd.toByteArray(Charsets.UTF_8),
-            hmacKeyHex = BuildConfig.HMAC_KEY
-        )
     }
 
     override fun onDestroy() {

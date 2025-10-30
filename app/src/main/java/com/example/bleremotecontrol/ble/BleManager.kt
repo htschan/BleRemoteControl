@@ -1,27 +1,17 @@
+// ble/BleManager.kt
 package com.example.bleremotecontrol.ble
 
 import android.annotation.SuppressLint
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothGatt
-import android.bluetooth.BluetoothGattCallback
-import android.bluetooth.BluetoothGattCharacteristic
-import android.bluetooth.BluetoothGattDescriptor
-import android.bluetooth.BluetoothManager
-import android.bluetooth.BluetoothProfile
-import android.bluetooth.le.BluetoothLeScanner
-import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
-import android.bluetooth.le.ScanResult
-import android.bluetooth.le.ScanSettings
+import android.bluetooth.*
+import android.bluetooth.le.*
 import android.content.Context
 import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
-import com.example.bleremotecontrol.crypto.HmacTools
-import java.util.Queue
-import java.util.UUID
-import java.util.concurrent.ConcurrentLinkedQueue
+import com.example.bleremotecontrol.BuildConfig
+import java.util.*
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 class BleManager(
     private val context: Context,
@@ -29,7 +19,6 @@ class BleManager(
     private val onReady: (Boolean) -> Unit,
     private val onError: (String) -> Unit,
 ) {
-
     private val TAG = "BleManager"
 
     private val btMgr = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -44,231 +33,180 @@ class BleManager(
 
     private val serviceUuid = UUID.fromString("4fafc201-1fb5-459e-8fcc-c5c9c331914b")
 
-    // Latest nonce pushed by device
-    @Volatile private var latestNonce: ByteArray? = null
-    @Volatile private var lastNonceMs: Long = 0
+    // Latest nonce as HEX string (ESP32 sends hex via notify)
+    @Volatile private var latestNonceHex: String? = null
+    @Volatile private var lastNonceMs: Long = 0L
 
-    private val pendingCommands: Queue<ByteArray> = ConcurrentLinkedQueue()
-
-    fun start() {
-        startScan()
-    }
-
+    fun start() = startScan()
     fun stop() {
         try { stopScan() } catch (_: Throwable) {}
         try { gatt?.disconnect() } catch (_: Throwable) {}
         try { gatt?.close() } catch (_: Throwable) {}
-        gatt = null
-        writeChar = null
-        notifyChar = null
+        gatt = null; writeChar = null; notifyChar = null
         onReady(false)
     }
 
+    // --- Public: single-frame command ---
+    fun sendSingleFrameCommand(command: String) {
+        val nonceHex = latestNonceHex
+        val canWrite = (writeChar != null && gatt != null)
+        val fresh = nonceHex != null && (System.currentTimeMillis() - lastNonceMs) <= 10_000
+        if (!canWrite) { onError("Not connected"); return }
+        if (!fresh) { onError("No fresh nonce yet"); return }
+
+        val key = BuildConfig.HMAC_KEY
+        if (key.isBlank()) { onError("HMAC key not configured"); return }
+
+        val macHex = hmac8Hex("$command|$nonceHex", key)
+        val frame = "F|$command|$nonceHex|$macHex"
+        writeFrame(frame)
+        onStatusUpdate("Sent single-frame: $command")
+    }
+
+    // --- BLE plumbing (scan/connect/discover/notify) ---
     @SuppressLint("MissingPermission")
     private fun startScan() {
-        if (!adapter.isEnabled) {
-            onError("Bluetooth is off")
-            return
-        }
-        scanner = adapter.bluetoothLeScanner
-        if (scanner == null) {
-            onError("No BLE scanner")
-            return
-        }
+        if (!adapter.isEnabled) { onError("Bluetooth is off"); return }
+        val scn = adapter.bluetoothLeScanner ?: run { onError("No BLE scanner"); return }
+        scanner = scn
 
         val filters = listOf(
-            // By name
             ScanFilter.Builder().setDeviceName("BtBridge").build(),
-            // Or by service UUID
             ScanFilter.Builder().setServiceUuid(ParcelUuid(serviceUuid)).build()
         )
-        val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .build()
-
+        val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
         scanCallback = object : ScanCallback() {
-            override fun onScanResult(callbackType: Int, result: ScanResult) {
-                val n = result.device.name ?: ""
-                val hasService = result.scanRecord?.serviceUuids?.any { it.uuid == serviceUuid } == true
-                if (n == "BtBridge" || hasService) {
-                    onStatusUpdate("Found ${n.ifEmpty { result.device.address }} — connecting…")
+            override fun onScanResult(type: Int, res: ScanResult) {
+                val n = res.device.name ?: ""
+                val hasSvc = res.scanRecord?.serviceUuids?.any { it.uuid == serviceUuid } == true
+                if (n == "BtBridge" || hasSvc) {
+                    onStatusUpdate("Found ${n.ifEmpty { res.device.address }} — connecting…")
                     stopScan()
-                    connect(result.device)
+                    connect(res.device)
                 }
             }
-
-            override fun onScanFailed(errorCode: Int) {
-                onError("Scan failed: $errorCode")
-            }
+            override fun onScanFailed(errorCode: Int) = onError("Scan failed: $errorCode")
         }
         onStatusUpdate("Scanning…")
-        scanner!!.startScan(filters, settings, scanCallback)
+        scn.startScan(filters, settings, scanCallback)
     }
 
     @SuppressLint("MissingPermission")
-    private fun stopScan() {
-        scanCallback?.let { cb ->
-            scanner?.stopScan(cb)
-        }
-        scanCallback = null
-    }
+    private fun stopScan() { scanCallback?.let { scanner?.stopScan(it) }; scanCallback = null }
 
     @SuppressLint("MissingPermission")
     private fun connect(device: BluetoothDevice) {
-        gatt =
-            device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        gatt = if (Build.VERSION.SDK_INT >= 31)
+            device.connectGatt(context, false, gattCb, BluetoothDevice.TRANSPORT_LE)
+        else device.connectGatt(context, false, gattCb)
     }
 
-    // Public API: queue a secure command
-    fun sendSecureCommand(commandBytes: ByteArray, hmacKeyHex: String) {
-        val key = HmacTools.hexToBytes(hmacKeyHex)
-        if (key.isEmpty()) {
-            onError("HMAC key not configured")
-            return
-        }
-        // Store as a combined object: we keep command now; when nonce arrives we compute HMAC and send
-        pendingCommands.add(commandBytes)
-        drainIfReady(key)
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun writeSmall(bytes: ByteArray) {
-        val c = writeChar ?: run {
-            onError("Write characteristic not ready")
-            return
-        }
-        val g = gatt ?: return
-
-        // respect small MTU; keep under 20B per spec
-        c.value = bytes
-        c.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT // or NO_RESPONSE if device supports
-        val ok = g.writeCharacteristic(c)
-        if (!ok) onError("Write failed to enqueue")
-    }
-
-    private fun drainIfReady(hmacKey: ByteArray) {
-        val nonce = latestNonce
-        val fresh = nonce != null && (System.currentTimeMillis() - lastNonceMs) <= 10_000
-        val canWrite = (writeChar != null && gatt != null)
-
-        if (!fresh || !canWrite) return
-
-        while (true) {
-            val cmd = pendingCommands.poll() ?: break
-            val hmac = HmacTools.hmacSha256(cmd, nonce!!, hmacKey) // HMAC over cmd||nonce
-            val hmac8 = hmac.copyOfRange(0, 8)
-
-            // 3 writes: [cmd], [nonce], [hmac8]
-            writeSmall(cmd)
-            writeSmall(nonce)
-            writeSmall(hmac8)
-            onStatusUpdate("Sent ${String(cmd)} (nonce ${nonce.size}B, hmac8)")
-        }
-    }
-
-    private val gattCallback = object : BluetoothGattCallback() {
+    private val gattCb = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                onError("GATT error $status")
-                stop()
-                return
+                onError("GATT error $status"); stop(); return
             }
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     onStatusUpdate("Connected; discovering services…")
-                    gatt.requestMtu(247) // best effort
+                    gatt.requestMtu(247) // enables single-frame headroom
                     gatt.discoverServices()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    onStatusUpdate("Disconnected")
-                    onReady(false)
-                    // auto-rescan
-                    startScan()
+                    onStatusUpdate("Disconnected"); onReady(false); startScan()
                 }
             }
         }
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-            Log.d(TAG, "MTU changed: $mtu status=$status")
+            Log.d(TAG, "MTU=$mtu status=$status")
         }
 
         @SuppressLint("MissingPermission")
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                onError("Service discovery failed: $status")
-                return
-            }
-
-            var foundWrite: BluetoothGattCharacteristic? = null
-            var foundNotify: BluetoothGattCharacteristic? = null
+            if (status != BluetoothGatt.GATT_SUCCESS) { onError("Service discovery failed: $status"); return }
+            var w: BluetoothGattCharacteristic? = null
+            var n: BluetoothGattCharacteristic? = null
 
             gatt.services.forEach { svc ->
                 if (svc.uuid == serviceUuid) {
                     svc.characteristics.forEach { ch ->
                         val p = ch.properties
                         if (p and BluetoothGattCharacteristic.PROPERTY_WRITE != 0 ||
-                            p and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0) {
-                            foundWrite = ch
-                        }
-                        if (p and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0) {
-                            foundNotify = ch
-                        }
+                            p and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0) w = ch
+                        if (p and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0) n = ch
                     }
                 }
             }
+            if (w == null || n == null) { onError("Required characteristics not found"); return }
+            writeChar = w; notifyChar = n
 
-            if (foundWrite == null || foundNotify == null) {
-                onError("Required characteristics not found")
-                return
-            }
-
-            writeChar = foundWrite
-            notifyChar = foundNotify
-
-            // Enable notifications
-            val ok = gatt.setCharacteristicNotification(foundNotify, true)
-            if (!ok) {
-                onError("Failed to enable notifications")
-                return
-            }
-            // Write CCCD
-            val cccd = foundNotify!!.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+            val ok = gatt.setCharacteristicNotification(n, true)
+            if (!ok) { onError("Failed to enable notifications"); return }
+            // Enable CCCD
+            val cccd = n!!.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
             if (cccd != null) {
                 cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                 gatt.writeDescriptor(cccd)
             }
-
-            onStatusUpdate("Ready")
-            onReady(true)
+            onStatusUpdate("Notifications enabled; waiting for nonce…")
+            // Buttons stay disabled until we receive a (fresh) nonce.
         }
 
-        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-            if (characteristic == notifyChar) {
-                val data = characteristic.value ?: return
-                // Assume this is the nonce (binary)
-                latestNonce = data
-                lastNonceMs = System.currentTimeMillis()
-                // If there are queued commands, send now
-                val key = HmacTools.hexToBytes(com.example.bleremotecontrol.BuildConfig.HMAC_KEY)
-                if (key != null && key.isNotEmpty()) {
-                    drainIfReady(key)
+        override fun onDescriptorWrite(gatt: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS) onError("CCCD write failed: $status")
+        }
+
+        override fun onCharacteristicChanged(gatt: BluetoothGatt, ch: BluetoothGattCharacteristic) {
+            if (ch == notifyChar) {
+                // ESP32 sends nonce as ASCII HEX (e.g., "A1B2C3..."), keep it as hex string
+                val s = ch.value?.toString(Charsets.UTF_8)?.trim().orEmpty()
+                if (s.isNotEmpty()) {
+                    latestNonceHex = s
+                    lastNonceMs = System.currentTimeMillis()
+                    // We are "ready" once connected + have a recent nonce
+                    onReady(true)
+                    onStatusUpdate("Nonce received (${s.length} hex chars)")
                 }
             }
         }
 
-        override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                onError("Write failed: $status")
-            }
+        override fun onCharacteristicWrite(gatt: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS) onError("Write failed: $status")
         }
+    }
 
-        override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                onStatusUpdate("Notifications enabled; waiting for nonce…")
-            } else {
-                onError("CCCD write failed: $status")
-            }
+    @SuppressLint("MissingPermission")
+    private fun writeFrame(frame: String) {
+        val c = writeChar ?: run { onError("Write characteristic not ready"); return }
+        val g = gatt ?: run { onError("Not connected"); return }
+
+        // Prefer NO_RESPONSE if supported; otherwise default is fine
+        c.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        c.value = frame.toByteArray(Charsets.UTF_8)
+        val ok = g.writeCharacteristic(c)
+        if (!ok) onError("Write enqueue failed")
+    }
+
+    // --- Crypto helpers ---
+    private fun hmac8Hex(message: String, keyUtf8: String): String {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(keyUtf8.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        val full = mac.doFinal(message.toByteArray(Charsets.UTF_8))
+        val first8 = full.copyOfRange(0, 8)
+        return bytesToHex(first8)
+    }
+
+    private fun bytesToHex(b: ByteArray): String {
+        val hex = CharArray(b.size * 2)
+        val digits = "0123456789abcdef".toCharArray()
+        var i = 0
+        b.forEach { v ->
+            val x = v.toInt() and 0xff
+            hex[i++] = digits[x ushr 4]
+            hex[i++] = digits[x and 0x0f]
         }
+        return String(hex)
     }
 }
