@@ -1,17 +1,14 @@
 package com.example.bleremotecontrol
 
 import android.Manifest
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothManager
-import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.widget.Button
 import android.widget.TextView
 import androidx.activity.ComponentActivity
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
+import androidx.annotation.RequiresPermission
 import com.example.bleremotecontrol.ble.BleManager
+import com.example.bleremotecontrol.util.TripleTapGuard
+
 
 class MainActivity : ComponentActivity() {
 
@@ -22,25 +19,13 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var bleManager: BleManager
 
-    private val permissionsLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { _ ->
-        maybeStart()
-    }
+    private lateinit var openGuard: TripleTapGuard
+    private lateinit var closeGuard: TripleTapGuard
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // Quick sanity: BLE available?
-        val btMgr = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
-        val adapter: BluetoothAdapter? = btMgr.adapter
-        if (adapter == null) {
-            finish() // no BLE
-            return
-        }
-
-        setContentView(R.layout.activity_main)
         tvStatus = findViewById(R.id.tvStatus)
         btnOpen = findViewById(R.id.btnOpen)
         btnClose = findViewById(R.id.btnClose)
@@ -48,48 +33,81 @@ class MainActivity : ComponentActivity() {
 
         bleManager = BleManager(
             context = this,
-            onStatusUpdate = { status -> runOnUiThread { tvStatus.text = getString(R.string.connect_status, status) } },
-            onReady = { ready -> runOnUiThread {
-                btnOpen.isEnabled = ready
-                btnClose.isEnabled = ready
-            }},
+            onStatusUpdate = { status ->
+                runOnUiThread {
+                    tvStatus.text = getString(R.string.connect_status, status)
+                }
+            },
+            onReady = { ready ->
+                runOnUiThread {
+                    // Only enable if not "busy" (during a send)
+                    if (!::openGuard.isInitialized || !::closeGuard.isInitialized) {
+                        btnOpen.isEnabled = ready
+                        btnClose.isEnabled = ready
+                    } else {
+                        openGuard.setBusy(!ready)
+                        closeGuard.setBusy(!ready)
+                    }
+                }
+            },
             onError = { msg -> runOnUiThread { tvStatus.text = "Status: $msg" } }
         )
 
-        btnOpen.setOnClickListener { bleManager.sendSingleFrameCommand("CmdOpen") }
-        btnClose.setOnClickListener { bleManager.sendSingleFrameCommand("CmdClose") }
+        // Attach triple-tap guards
+        openGuard = TripleTapGuard(
+            button = btnOpen,
+            requiredTaps = 3,
+            windowMs = 2500,
+            onConfirmed = {
+                // Send "Open"; request nonce after sending
+                bleManager.sendSingleFrameCommand("CmdOpen")
+                bleManager.requestNonce() // ESP32 understands "GET_NONCE"
+                // Busy remains until new nonce arrives (onReady(true) is set there)
+            },
+            onUpdateStatus = { s ->
+                runOnUiThread {
+                    tvStatus.text = getString(R.string.connect_status, s)
+                }
+            }
+        ).also { it.attach() }
 
-        btnRescan.setOnClickListener {
+        closeGuard = TripleTapGuard(
+            button = btnClose,
+            requiredTaps = 3,
+            windowMs = 2500,
+            onConfirmed = {
+                bleManager.sendSingleFrameCommand("CmdClose")
+                bleManager.requestNonce()
+            },
+            onUpdateStatus = { s ->
+                runOnUiThread {
+                    tvStatus.text = getString(R.string.connect_status, s)
+                }
+            }
+        ).also { it.attach() }
+
+
+        btnRescan.setOnClickListener @androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT) {
+            // Cancel/reset visual states
+            openGuard.reset()
+            closeGuard.reset()
             bleManager.stop()
             bleManager.start()
         }
 
-        ensurePermissions()
-    }
-
-    private fun ensurePermissions() {
-        val need = mutableListOf<String>()
-        if (Build.VERSION.SDK_INT >= 31) {
-            if (!granted(Manifest.permission.BLUETOOTH_SCAN)) need += Manifest.permission.BLUETOOTH_SCAN
-            if (!granted(Manifest.permission.BLUETOOTH_CONNECT)) need += Manifest.permission.BLUETOOTH_CONNECT
-        } else {
-            if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) need += Manifest.permission.ACCESS_FINE_LOCATION
-        }
-        if (need.isNotEmpty()) {
-            permissionsLauncher.launch(need.toTypedArray())
-        } else {
-            maybeStart()
-        }
-    }
-
-    private fun granted(p: String) =
-        ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
-
-    private fun maybeStart() {
-        tvStatus.text = "Status: Scanning…"
+        // initial: Start scanning (keep your existing permission logic)
+        tvStatus.text = getString(R.string.connect_status, "Scanning…")
         bleManager.start()
     }
 
+    override fun onPause() {
+        super.onPause()
+        // Reset as a precaution (prevents "stuck" (2/3) labels)
+        if (::openGuard.isInitialized) openGuard.reset()
+        if (::closeGuard.isInitialized) closeGuard.reset()
+    }
+
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override fun onDestroy() {
         super.onDestroy()
         bleManager.stop()
