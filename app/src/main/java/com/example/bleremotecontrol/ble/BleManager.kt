@@ -1,6 +1,7 @@
 // ble/BleManager.kt
 package com.example.bleremotecontrol.ble
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.bluetooth.le.*
@@ -8,6 +9,7 @@ import android.content.Context
 import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
+import androidx.annotation.RequiresPermission
 import com.example.bleremotecontrol.BuildConfig
 import java.util.*
 import javax.crypto.Mac
@@ -42,6 +44,7 @@ class BleManager(
     @Volatile private var lastNonceMs: Long = 0L
 
     fun start() = startScan()
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun stop() {
         try { stopScan() } catch (_: Throwable) {}
         try { gatt?.disconnect() } catch (_: Throwable) {}
@@ -128,9 +131,7 @@ class BleManager(
 
     @SuppressLint("MissingPermission")
     private fun connect(device: BluetoothDevice) {
-        gatt = if (Build.VERSION.SDK_INT >= 31)
-            device.connectGatt(context, false, gattCb, BluetoothDevice.TRANSPORT_LE)
-        else device.connectGatt(context, false, gattCb)
+        gatt = device.connectGatt(context, false, gattCb, BluetoothDevice.TRANSPORT_LE)
     }
 
     private val gattCb = object : BluetoothGattCallback() {
@@ -205,15 +206,8 @@ class BleManager(
 
             // --- THIS IS THE KEY FIX ---
             // Use the modern, non-deprecated API to write to the descriptor
-            val writeStatus = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val writeStatus =
                 gatt.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-            } else {
-                // Fallback for older APIs that don't have the new method
-                @Suppress("DEPRECATION")
-                cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                @Suppress("DEPRECATION")
-                if (gatt.writeDescriptor(cccd)) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_FAILURE
-            }
 
             if (writeStatus != BluetoothGatt.GATT_SUCCESS) {
                 onError("Failed to write CCCD descriptor")
