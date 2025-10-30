@@ -6,7 +6,6 @@ import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
-import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
 import androidx.annotation.RequiresPermission
