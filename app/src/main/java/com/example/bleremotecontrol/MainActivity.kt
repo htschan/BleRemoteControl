@@ -1,14 +1,17 @@
 package com.example.bleremotecontrol
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.widget.Button
 import android.widget.TextView
 import androidx.activity.ComponentActivity
-import androidx.annotation.RequiresPermission
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import com.example.bleremotecontrol.ble.BleManager
 import com.example.bleremotecontrol.util.TripleTapGuard
-
 
 class MainActivity : ComponentActivity() {
 
@@ -22,6 +25,28 @@ class MainActivity : ComponentActivity() {
     private lateinit var openGuard: TripleTapGuard
     private lateinit var closeGuard: TripleTapGuard
 
+    // --- PERMISSION HANDLING ---
+
+    private val requiredPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        arrayOf(
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_ADVERTISE
+        )
+    } else {
+        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+
+    private val requestPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+        if (permissions.values.all { it }) {
+            startBleProcess()
+        } else {
+            tvStatus.text = "Permissions required. Please grant permissions in settings."
+        }
+    }
+
+    // --- LIFECYCLE ---
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -33,14 +58,9 @@ class MainActivity : ComponentActivity() {
 
         bleManager = BleManager(
             context = this,
-            onStatusUpdate = { status ->
-                runOnUiThread {
-                    tvStatus.text = getString(R.string.connect_status, status)
-                }
-            },
+            onStatusUpdate = { status -> runOnUiThread { tvStatus.text = getString(R.string.connect_status, status) } },
             onReady = { ready ->
                 runOnUiThread {
-                    // Only enable if not "busy" (during a send)
                     if (!::openGuard.isInitialized || !::closeGuard.isInitialized) {
                         btnOpen.isEnabled = ready
                         btnClose.isEnabled = ready
@@ -53,22 +73,61 @@ class MainActivity : ComponentActivity() {
             onError = { msg -> runOnUiThread { tvStatus.text = "Status: $msg" } }
         )
 
-        // Attach triple-tap guards
+        setupTapGuards()
+
+        btnRescan.setOnClickListener {
+            openGuard.reset()
+            closeGuard.reset()
+            checkPermissionsAndStart()
+        }
+
+        checkPermissionsAndStart()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (::openGuard.isInitialized) openGuard.reset()
+        if (::closeGuard.isInitialized) closeGuard.reset()
+    }
+
+    @SuppressLint("MissingPermission") // Permissions are checked before calling stop()
+    override fun onDestroy() {
+        super.onDestroy()
+        bleManager.stop()
+    }
+
+    // --- PRIVATE HELPERS ---
+
+    private fun checkPermissionsAndStart() {
+        val missingPermissions = requiredPermissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }.toTypedArray()
+
+        if (missingPermissions.isEmpty()) {
+            startBleProcess()
+        } else {
+            tvStatus.text = "Requesting permissions..."
+            requestPermissionLauncher.launch(missingPermissions)
+        }
+    }
+
+    @SuppressLint("MissingPermission") // Permissions are checked before this is called
+    private fun startBleProcess() {
+        bleManager.stop()
+        tvStatus.text = getString(R.string.connect_status, "Scanning…")
+        bleManager.start()
+    }
+
+    private fun setupTapGuards() {
         openGuard = TripleTapGuard(
             button = btnOpen,
             requiredTaps = 3,
             windowMs = 2500,
             onConfirmed = {
-                // Send "Open"; request nonce after sending
                 bleManager.sendSingleFrameCommand("CmdOpen")
-                bleManager.requestNonce() // ESP32 understands "GET_NONCE"
-                // Busy remains until new nonce arrives (onReady(true) is set there)
+                bleManager.requestNonce()
             },
-            onUpdateStatus = { s ->
-                runOnUiThread {
-                    tvStatus.text = getString(R.string.connect_status, s)
-                }
-            }
+            onUpdateStatus = { s -> runOnUiThread { tvStatus.text = getString(R.string.connect_status, s) } }
         ).also { it.attach() }
 
         closeGuard = TripleTapGuard(
@@ -79,37 +138,7 @@ class MainActivity : ComponentActivity() {
                 bleManager.sendSingleFrameCommand("CmdClose")
                 bleManager.requestNonce()
             },
-            onUpdateStatus = { s ->
-                runOnUiThread {
-                    tvStatus.text = getString(R.string.connect_status, s)
-                }
-            }
+            onUpdateStatus = { s -> runOnUiThread { tvStatus.text = getString(R.string.connect_status, s) } }
         ).also { it.attach() }
-
-
-        btnRescan.setOnClickListener @androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT) {
-            // Cancel/reset visual states
-            openGuard.reset()
-            closeGuard.reset()
-            bleManager.stop()
-            bleManager.start()
-        }
-
-        // initial: Start scanning (keep your existing permission logic)
-        tvStatus.text = getString(R.string.connect_status, "Scanning…")
-        bleManager.start()
-    }
-
-    override fun onPause() {
-        super.onPause()
-        // Reset as a precaution (prevents "stuck" (2/3) labels)
-        if (::openGuard.isInitialized) openGuard.reset()
-        if (::closeGuard.isInitialized) closeGuard.reset()
-    }
-
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    override fun onDestroy() {
-        super.onDestroy()
-        bleManager.stop()
     }
 }
