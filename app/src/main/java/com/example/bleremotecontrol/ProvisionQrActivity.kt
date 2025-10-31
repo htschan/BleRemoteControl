@@ -40,14 +40,14 @@ class ProvisionQrActivity : ComponentActivity() {
         imgQr = findViewById(R.id.imgQr)
         btnShare = findViewById(R.id.btnShare)
 
-        // Falls bereits vorhanden, Feld vorfüllen aber sofort maskieren
+        // If a key already exists, pre-fill the field but mask it immediately.
         SecureHmacStore.getBytes(this)?.let { key ->
             val txt = key.toString(Charsets.UTF_8)
             Arrays.fill(key, 0)
             if (txt.isNotBlank()) {
                 etSecret.setText(txt)
                 maskEditText()
-                // QR optional direkt generieren
+                // Optionally generate QR directly
                 generateAndShowQr(txt)
             }
         }
@@ -55,20 +55,20 @@ class ProvisionQrActivity : ComponentActivity() {
         btnOk.setOnClickListener {
             val raw = etSecret.text.toString().trim()
             if (!uuidRegex.matches(raw)) {
-                Toast.makeText(this, "Bitte gültige UUID eingeben", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Please enter a valid UUID", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            // Sicher speichern
-            SecureHmacStore.save(this, raw)
+            // This activity no longer saves the key. It only generates the QR code.
+            // SecureHmacStore.save(this, raw)
 
-            // Eingabefeld maskieren
+            // Mask input field
             maskEditText()
 
-            // QR generieren
+            // Generate QR
             generateAndShowQr(raw)
 
-            Toast.makeText(this, "Secret gespeichert", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "QR code generated", Toast.LENGTH_SHORT).show()
         }
 
         btnShare.setOnClickListener {
@@ -85,7 +85,7 @@ class ProvisionQrActivity : ComponentActivity() {
     }
 
     private fun generateAndShowQr(content: String) {
-        // QR-Inhalt = exakt die UUID (plain text)
+        // QR content = exactly the UUID (plain text)
         val size = 800 // px
         val hints = mapOf(
             EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M,
@@ -118,9 +118,9 @@ class ProvisionQrActivity : ComponentActivity() {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            startActivity(Intent.createChooser(intent, "QR-Code teilen"))
+            startActivity(Intent.createChooser(intent, "Share QR Code"))
         } catch (e: Exception) {
-            Toast.makeText(this, "Teilen fehlgeschlagen: ${e.message}", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Sharing failed: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 }

@@ -75,9 +75,28 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val provisionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        refreshSecretState()   // nach Rückkehr Zustand neu bewerten
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        val toolbar = findViewById<com.google.android.material.appbar.MaterialToolbar>(R.id.toolbar)
+        toolbar.inflateMenu(R.menu.menu_main)  // <-- res/menu/menu_main.xml
+        toolbar.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                R.id.action_manage_secret -> {
+                    provisionLauncher.launch(Intent(this, ProvisionQrActivity::class.java))
+                    true
+                }
+
+                else -> false
+            }
+        }
 
         val menuHost: MenuHost = this
         menuHost.addMenuProvider(object : MenuProvider {

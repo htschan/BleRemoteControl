@@ -5,6 +5,14 @@
     android:layout_height="match_parent"
     android:background="@drawable/background_garage_door">
 
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:background="?attr/colorSurface"
+        android:title="BleRemoteControl"
+        android:theme="@style/ThemeOverlay.Material3.ActionBar" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
