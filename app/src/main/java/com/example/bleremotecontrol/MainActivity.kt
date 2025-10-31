@@ -15,6 +15,9 @@ import androidx.core.view.isVisible
 import com.example.bleremotecontrol.ble.BleManager
 import com.example.bleremotecontrol.security.SecureHmacStore
 import com.example.bleremotecontrol.util.TripleTapGuard
+import androidx.core.view.MenuHost
+import androidx.core.view.MenuProvider
+import androidx.lifecycle.Lifecycle
 
 class MainActivity : ComponentActivity() {
 
@@ -44,13 +47,14 @@ class MainActivity : ComponentActivity() {
         arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
     }
 
-    private val requestPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-        if (permissions.values.all { it }) {
-            startBleProcess()
-        } else {
-            tvStatus.text = "Permissions required. Please grant permissions in settings."
+    private val requestPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+            if (permissions.values.all { it }) {
+                startBleProcess()
+            } else {
+                tvStatus.text = "Permissions required. Please grant permissions in settings."
+            }
         }
-    }
 
     // --- LIFECYCLE ---
     private val qrLauncher = registerForActivityResult(
@@ -75,6 +79,27 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        val menuHost: MenuHost = this
+        menuHost.addMenuProvider(object : MenuProvider {
+            override fun onCreateMenu(
+                menu: android.view.Menu,
+                menuInflater: android.view.MenuInflater
+            ) {
+                menuInflater.inflate(R.menu.menu_main, menu)
+            }
+
+            override fun onMenuItemSelected(menuItem: android.view.MenuItem): Boolean {
+                return when (menuItem.itemId) {
+                    R.id.action_manage_secret -> {
+                        startActivity(Intent(this@MainActivity, ProvisionQrActivity::class.java))
+                        true
+                    }
+
+                    else -> false
+                }
+            }
+        }, this, Lifecycle.State.RESUMED)
+
         tvStatus = findViewById(R.id.tvStatus)
         btnOpen = findViewById(R.id.btnOpen)
         btnClose = findViewById(R.id.btnClose)
@@ -87,7 +112,11 @@ class MainActivity : ComponentActivity() {
 
         bleManager = BleManager(
             context = this,
-            onStatusUpdate = { status -> runOnUiThread { tvStatus.text = getString(R.string.connect_status, status) } },
+            onStatusUpdate = { status ->
+                runOnUiThread {
+                    tvStatus.text = getString(R.string.connect_status, status)
+                }
+            },
             onReady = { ready ->
                 runOnUiThread {
                     val hasSecret = SecureHmacStore.exists(this)
@@ -187,7 +216,11 @@ class MainActivity : ComponentActivity() {
                 bleManager.sendSingleFrameCommand("CmdOpen")
                 bleManager.requestNonce()
             },
-            onUpdateStatus = { s -> runOnUiThread { tvStatus.text = getString(R.string.connect_status, s) } }
+            onUpdateStatus = { s ->
+                runOnUiThread {
+                    tvStatus.text = getString(R.string.connect_status, s)
+                }
+            }
         ).also { it.attach() }
 
         closeGuard = TripleTapGuard(
@@ -198,7 +231,11 @@ class MainActivity : ComponentActivity() {
                 bleManager.sendSingleFrameCommand("CmdClose")
                 bleManager.requestNonce()
             },
-            onUpdateStatus = { s -> runOnUiThread { tvStatus.text = getString(R.string.connect_status, s) } }
+            onUpdateStatus = { s ->
+                runOnUiThread {
+                    tvStatus.text = getString(R.string.connect_status, s)
+                }
+            }
         ).also { it.attach() }
     }
 }
