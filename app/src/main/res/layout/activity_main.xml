@@ -20,6 +20,24 @@
             android:gravity="center_horizontal"
             android:layout_marginBottom="24dp" />
 
+        <TextView
+            android:id="@+id/tvSecretHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Bitte HMAC-Secret per QR scannen."
+            android:padding="12dp"
+            android:textColor="@android:color/white"
+            android:background="#CCF44336"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/btnScanKey"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="QR-Code scannen"
+            android:layout_marginTop="8dp"
+            android:visibility="gone" />
+
         <Button
             android:id="@+id/btnOpen"
             android:text="Open"

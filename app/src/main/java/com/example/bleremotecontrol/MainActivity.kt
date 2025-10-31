@@ -2,6 +2,7 @@ package com.example.bleremotecontrol
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -10,7 +11,9 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.view.isVisible
 import com.example.bleremotecontrol.ble.BleManager
+import com.example.bleremotecontrol.security.SecureHmacStore
 import com.example.bleremotecontrol.util.TripleTapGuard
 
 class MainActivity : ComponentActivity() {
@@ -24,6 +27,10 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var openGuard: TripleTapGuard
     private lateinit var closeGuard: TripleTapGuard
+
+    private lateinit var tvSecretHint: TextView
+
+    private lateinit var btnScanKey: Button
 
     // --- PERMISSION HANDLING ---
 
@@ -46,6 +53,23 @@ class MainActivity : ComponentActivity() {
     }
 
     // --- LIFECYCLE ---
+    private val qrLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { res ->
+        if (res.resultCode == RESULT_OK) {
+            val scanned = res.data?.getStringExtra(ScanQrActivity.EXTRA_QR_RESULT)
+            if (!scanned.isNullOrBlank()) {
+                // Minimal validation (optionally stricter: UUID-Regex)
+                SecureHmacStore.save(this, scanned.trim())
+                tvStatus.text = getString(R.string.connect_status, "Secret saved. Scanning…")
+                bleManager.start() // if not already started
+            } else {
+                tvStatus.text = getString(R.string.connect_status, "QR scan canceled/empty")
+            }
+        } else {
+            tvStatus.text = getString(R.string.connect_status, "QR scan canceled")
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,25 +79,40 @@ class MainActivity : ComponentActivity() {
         btnOpen = findViewById(R.id.btnOpen)
         btnClose = findViewById(R.id.btnClose)
         btnRescan = findViewById(R.id.btnRescan)
+        tvSecretHint = findViewById(R.id.tvSecretHint)
+        btnScanKey = findViewById(R.id.btnScanKey)
+        btnScanKey.isVisible = false
+
+        btnScanKey.setOnClickListener { promptScan() }
 
         bleManager = BleManager(
             context = this,
             onStatusUpdate = { status -> runOnUiThread { tvStatus.text = getString(R.string.connect_status, status) } },
             onReady = { ready ->
                 runOnUiThread {
-                    if (!::openGuard.isInitialized || !::closeGuard.isInitialized) {
-                        btnOpen.isEnabled = ready
-                        btnClose.isEnabled = ready
-                    } else {
-                        openGuard.setBusy(!ready)
-                        closeGuard.setBusy(!ready)
-                    }
+                    val hasSecret = SecureHmacStore.exists(this)
+                    val enabled = ready && hasSecret
+                    // Buttons only active if BLE is ready + secret is present
+                    btnOpen.isEnabled = enabled
+                    btnClose.isEnabled = enabled
+
+                    if (::openGuard.isInitialized) openGuard.setBusy(!enabled)
+                    if (::closeGuard.isInitialized) closeGuard.setBusy(!enabled)
                 }
             },
             onError = { msg -> runOnUiThread { tvStatus.text = "Status: $msg" } }
         )
 
         setupTapGuards()
+
+        // Check secret on start:
+        refreshSecretState()
+        if (SecureHmacStore.exists(this)) {
+            tvStatus.text = getString(R.string.connect_status, "Scanning…")
+            bleManager.start()
+        } else {
+            tvStatus.text = getString(R.string.connect_status, "Please scan QR secret")
+        }
 
         btnRescan.setOnClickListener {
             openGuard.reset()
@@ -82,6 +121,25 @@ class MainActivity : ComponentActivity() {
         }
 
         checkPermissionsAndStart()
+    }
+
+    private fun promptScan() {
+        val intent = Intent(this, ScanQrActivity::class.java)
+        qrLauncher.launch(intent)
+    }
+
+    private fun refreshSecretState() {
+        val hasSecret = SecureHmacStore.exists(this)
+        tvSecretHint.isVisible = !hasSecret
+        btnScanKey.isVisible = !hasSecret
+
+        // Reset taps/guard and disable buttons if secret is missing
+        if (!hasSecret) {
+            btnOpen.isEnabled = false
+            btnClose.isEnabled = false
+            if (::openGuard.isInitialized) openGuard.reset()
+            if (::closeGuard.isInitialized) closeGuard.reset()
+        }
     }
 
     override fun onPause() {
@@ -113,9 +171,11 @@ class MainActivity : ComponentActivity() {
 
     @SuppressLint("MissingPermission") // Permissions are checked before this is called
     private fun startBleProcess() {
-        bleManager.stop()
-        tvStatus.text = getString(R.string.connect_status, "Scanning…")
-        bleManager.start()
+        if (SecureHmacStore.exists(this)) {
+            bleManager.stop()
+            tvStatus.text = getString(R.string.connect_status, "Scanning…")
+            bleManager.start()
+        }
     }
 
     private fun setupTapGuards() {
