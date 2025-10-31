@@ -9,10 +9,10 @@ import android.content.Context
 import android.os.ParcelUuid
 import android.util.Log
 import androidx.annotation.RequiresPermission
-import com.example.bleremotecontrol.BuildConfig
 import java.util.*
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import com.example.bleremotecontrol.security.SecureHmacStore
 
 class BleManager(
     private val context: Context,
@@ -60,10 +60,19 @@ class BleManager(
         if (!canWrite) { onError("Not connected"); return }
         if (!fresh) { onError("No fresh nonce yet"); return }
 
-        val key = BuildConfig.HMAC_KEY
-        if (key.isBlank()) { onError("HMAC key not configured"); return }
+        val keyBytes = SecureHmacStore.getBytes(context)
+        if (keyBytes == null || keyBytes.isEmpty()) {
+            onError("Secret key missing. Please scan QR.")
+            return
+        }
 
-        val macHex = hmac8Hex("$command|$nonceHex", key)
+        val macHex = try {
+            hmac8Hex("$command|$nonceHex", keyBytes)
+        } finally {
+            // wipe key material best-effort
+            for (i in keyBytes.indices) keyBytes[i] = 0
+        }
+
         val frame = "F|$command|$nonceHex|$macHex"
         writeFrame(frame)
         onStatusUpdate("Sent single-frame: $command")
@@ -270,9 +279,9 @@ class BleManager(
     }
 
     // --- Crypto helpers ---
-    private fun hmac8Hex(message: String, keyUtf8: String): String {
+    private fun hmac8Hex(message: String, keyBytes: ByteArray): String {
         val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(keyUtf8.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        mac.init(SecretKeySpec(keyBytes, "HmacSHA256"))
         val full = mac.doFinal(message.toByteArray(Charsets.UTF_8))
         val first8 = full.copyOfRange(0, 8)
         return bytesToHex(first8)

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent">
+
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="match_parent" android:layout_height="match_parent" />
+
+    <TextView
+        android:id="@+id/hint"
+        android:text="Scan the QR with the HMAC secret"
+        android:background="#80000000"
+        android:textColor="#FFFFFF"
+        android:padding="12dp"
+        android:layout_gravity="bottom"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+</FrameLayout>

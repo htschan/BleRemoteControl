@@ -3,6 +3,7 @@
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
     <!-- Android 12+ (API 31+) runtime permissions are also required -->
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
@@ -17,6 +18,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.BleRemoteControl">
+        <activity android:name=".ScanQrActivity" />
         <activity
             android:name=".MainActivity"
             android:exported="true">

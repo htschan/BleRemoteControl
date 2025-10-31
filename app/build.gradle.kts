@@ -20,14 +20,6 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
-        // --- load HMAC_KEY from private.properties ---
-        val propsFile = file("private.properties")
-        val props = Properties()
-        if (propsFile.exists()) props.load(propsFile.inputStream())
-
-        val hmacKey = props.getProperty("HMAC_KEY") ?: ""
-        buildConfigField("String", "HMAC_KEY", "\"$hmacKey\"")
     }
 
     buildTypes {
@@ -53,6 +45,14 @@ android {
 }
 
 dependencies {
+    // Secure storage
+    implementation(libs.androidx.security.crypto)
+    // CameraX + ML Kit Barcode
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.barcode.scanning)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
@@ -68,6 +68,6 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
-    implementation("com.google.android.material:material:1.13.0")
-    implementation("androidx.appcompat:appcompat:1.7.1")
+    implementation(libs.material)
+    implementation(libs.androidx.appcompat)
 }
