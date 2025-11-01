@@ -4,9 +4,11 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.widget.Button
+import android.widget.RelativeLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,6 +23,7 @@ import androidx.lifecycle.Lifecycle
 
 class MainActivity : ComponentActivity() {
 
+    private lateinit var mainContainer: RelativeLayout
     private lateinit var tvStatus: TextView
     private lateinit var btnOpen: Button
     private lateinit var btnClose: Button
@@ -65,6 +68,7 @@ class MainActivity : ComponentActivity() {
             if (!scanned.isNullOrBlank()) {
                 // Minimal validation (optionally stricter: UUID-Regex)
                 SecureHmacStore.save(this, scanned.trim())
+                refreshSecretState()
                 tvStatus.text = getString(R.string.connect_status, "Secret saved. Scanning…")
                 bleManager.start() // if not already started
             } else {
@@ -119,6 +123,7 @@ class MainActivity : ComponentActivity() {
             }
         }, this, Lifecycle.State.RESUMED)
 
+        mainContainer = findViewById(R.id.main_container)
         tvStatus = findViewById(R.id.tvStatus)
         btnOpen = findViewById(R.id.btnOpen)
         btnClose = findViewById(R.id.btnClose)
@@ -143,6 +148,12 @@ class MainActivity : ComponentActivity() {
                     // Buttons only active if BLE is ready + secret is present
                     btnOpen.isEnabled = enabled
                     btnClose.isEnabled = enabled
+
+                    if (ready) {
+                        mainContainer.setBackgroundColor(Color.parseColor("#A5D6A7")) // light green
+                    } else {
+                        mainContainer.setBackgroundResource(R.drawable.background_garage_door)
+                    }
 
                     if (::openGuard.isInitialized) openGuard.setBusy(!enabled)
                     if (::closeGuard.isInitialized) closeGuard.setBusy(!enabled)
@@ -200,6 +211,11 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         bleManager.stop()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshSecretState()
     }
 
     // --- PRIVATE HELPERS ---
