@@ -1,0 +1,75 @@
+name: Android CI (APK)
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      JAVA_VERSION: '17'
+      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+
+      # Falls du signieren willst: (Secrets im Repo anlegen, siehe unten)
+      # ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      # ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      # ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      # ANDROID_KEY_ALIAS_PASSWORD: ${{ secrets.ANDROID_KEY_ALIAS_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Gradle wrapper permissions
+        run: chmod +x ./gradlew
+
+      - name: Build Debug & Release APKs (unsigned)
+        run: ./gradlew --no-daemon clean assembleDebug assembleRelease
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload Release APK (unsigned)
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-unsigned-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      # ------- OPTIONAL: Signing aktivieren -------
+      # - name: Decode keystore
+      #   if: env.ANDROID_KEYSTORE_BASE64 != ''
+      #   run: |
+      #     echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > keystore.jks
+
+      # - name: Build signed Release (Gradle signingConfig)
+      #   if: env.ANDROID_KEYSTORE_BASE64 != ''
+      #   env:
+      #     STORE_FILE: ${{ github.workspace }}/keystore.jks
+      #     STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      #     KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      #     KEY_PASSWORD: ${{ secrets.ANDROID_KEY_ALIAS_PASSWORD }}
+      #   run: ./gradlew --no-daemon clean assembleRelease
+
+      # - name: Upload Release APK (signed)
+      #   if: env.ANDROID_KEYSTORE_BASE64 != ''
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: app-release-signed-apk
+      #     path: app/build/outputs/apk/release/*.apk
+      #     if-no-files-found: error
