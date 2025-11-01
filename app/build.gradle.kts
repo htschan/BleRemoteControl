@@ -22,6 +22,20 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("release") {
+            val storeFilePath = System.getenv("STORE_FILE") ?: ""
+            if (storeFilePath.isNotBlank()) {
+                storeFile = file(storeFilePath)
+                storePassword = System.getenv("STORE_PASSWORD") ?: ""
+                keyAlias = System.getenv("KEY_ALIAS") ?: ""
+                keyPassword = System.getenv("KEY_PASSWORD") ?: ""
+                enableV1Signing = true
+                enableV2Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
