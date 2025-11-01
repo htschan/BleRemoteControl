@@ -25,6 +25,7 @@ class ProvisionQrActivity : ComponentActivity() {
 
     private lateinit var etSecret: EditText
     private lateinit var btnOk: Button
+    private lateinit var btnReset: Button
     private lateinit var imgQr: ImageView
     private lateinit var btnShare: Button
 
@@ -37,20 +38,12 @@ class ProvisionQrActivity : ComponentActivity() {
 
         etSecret = findViewById(R.id.etSecret)
         btnOk = findViewById(R.id.btnOk)
+        btnReset = findViewById(R.id.btnReset)
         imgQr = findViewById(R.id.imgQr)
         btnShare = findViewById(R.id.btnShare)
 
-        // If a key already exists, pre-fill the field but mask it immediately.
-        SecureHmacStore.getBytes(this)?.let { key ->
-            val txt = key.toString(Charsets.UTF_8)
-            Arrays.fill(key, 0)
-            if (txt.isNotBlank()) {
-                etSecret.setText(txt)
-                maskEditText()
-                // Optionally generate QR directly
-                generateAndShowQr(txt)
-            }
-        }
+        imgQr.setImageDrawable(null)
+        btnShare.isEnabled = false
 
         btnOk.setOnClickListener {
             val raw = etSecret.text.toString().trim()
@@ -62,8 +55,9 @@ class ProvisionQrActivity : ComponentActivity() {
             // This activity no longer saves the key. It only generates the QR code.
             // SecureHmacStore.save(this, raw)
 
-            // Mask input field
-            maskEditText()
+            // Mask and lock input field (only after OK)
+            etSecret.transformationMethod = PasswordTransformationMethod.getInstance()
+            etSecret.isEnabled = false
 
             // Generate QR
             generateAndShowQr(raw)
@@ -75,6 +69,16 @@ class ProvisionQrActivity : ComponentActivity() {
             lastQrBitmap?.let { bmp ->
                 shareQrPng(bmp)
             }
+        }
+
+        btnReset.setOnClickListener {
+            SecureHmacStore.clear(this)
+            etSecret.text?.clear()
+            etSecret.transformationMethod = null
+            etSecret.isEnabled = true
+            imgQr.setImageDrawable(null)
+            btnShare.isEnabled = false
+            lastQrBitmap = null
         }
     }
 
