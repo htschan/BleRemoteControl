@@ -1,4 +1,4 @@
-package com.example.bleremotecontrol.ui.theme
+package ch.sorawit.bleremotecontrol.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

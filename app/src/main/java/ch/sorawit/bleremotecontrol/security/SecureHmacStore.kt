@@ -1,4 +1,4 @@
-package com.example.bleremotecontrol.security
+package ch.sorawit.bleremotecontrol.security
 
 import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences

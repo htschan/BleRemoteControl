@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.bleremotecontrol"
+    namespace = "ch.sorawit.bleremotecontrol"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.bleremotecontrol"
+        applicationId = "ch.sorawit.bleremotecontrol"
         minSdk = 26              // required for adaptive icons & CameraX
         targetSdk = 36
         versionCode = 3

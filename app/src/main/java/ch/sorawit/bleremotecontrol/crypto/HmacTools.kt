@@ -1,4 +1,4 @@
-package com.example.bleremotecontrol.crypto
+package ch.sorawit.bleremotecontrol.crypto
 
 import android.util.Log
 import javax.crypto.Mac

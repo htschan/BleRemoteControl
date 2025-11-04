@@ -1,4 +1,4 @@
-package com.example.bleremotecontrol
+package ch.sorawit.bleremotecontrol
 
 import android.content.Intent
 import android.graphics.Bitmap
@@ -12,14 +12,13 @@ import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.core.content.FileProvider
-import com.example.bleremotecontrol.security.SecureHmacStore
+import ch.sorawit.bleremotecontrol.security.SecureHmacStore
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import java.io.File
 import java.io.FileOutputStream
-import java.util.*
 
 class ProvisionQrActivity : ComponentActivity() {
 
