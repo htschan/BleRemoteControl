@@ -1,10 +1,8 @@
-name: Android CI (APK)
+name: Android CI (Signed AAB)
 
 on:
   workflow_dispatch: {}
   push:
-    branches: [ main, master ]
-  pull_request:
     branches: [ main, master ]
 
 jobs:
@@ -18,7 +16,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -31,57 +29,22 @@ jobs:
       - name: Gradle wrapper permissions
         run: chmod +x ./gradlew
 
-      # -------- Unsigned Build (immer) --------
-      - name: Build Debug & Release (unsigned)
-        run: ./gradlew --no-daemon clean assembleDebug assembleRelease
-
-      - name: Upload Debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-
-      - name: Upload Release APK (unsigned)
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release-unsigned-apk
-          path: app/build/outputs/apk/release/*.apk
-          if-no-files-found: error
-
-      # -------- OPTIONAL: Signed Build (nur wenn Secrets vorhanden) --------
-      - name: Check signing secrets
-        id: have_signing
-        shell: bash
-        run: |
-          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ] && \
-             [ -n "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" ] && \
-             [ -n "${{ secrets.ANDROID_KEY_ALIAS }}" ] && \
-             [ -n "${{ secrets.ANDROID_KEY_ALIAS_PASSWORD }}" ]; then
-            echo "have=true" >> $GITHUB_OUTPUT
-          else
-            echo "have=false" >> $GITHUB_OUTPUT
-          fi
-
+      # Keystore aus Secret decodieren
       - name: Decode keystore
-        if: steps.have_signing.outputs.have == 'true'
-        run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > keystore.jks
-          ls -l keystore.jks
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > keystore.jks
 
-      - name: Build signed Release
-        if: steps.have_signing.outputs.have == 'true'
+      # Signiertes AAB bauen (ENV für signingConfig)
+      - name: Build Release Bundle (signed AAB)
         env:
           STORE_FILE: ${{ github.workspace }}/keystore.jks
           STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_ALIAS_PASSWORD }}
-        run: ./gradlew --no-daemon clean assembleRelease
+        run: ./gradlew --no-daemon clean bundleRelease
 
-      - name: Upload Release APK (signed)
-        if: steps.have_signing.outputs.have == 'true'
+      - name: Upload Release AAB
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-signed-apk
-          path: app/build/outputs/apk/release/*.apk
+          name: app-release-aab
+          path: app/build/outputs/bundle/release/*.aab
           if-no-files-found: error

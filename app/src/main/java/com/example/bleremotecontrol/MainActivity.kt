@@ -70,7 +70,7 @@ class MainActivity : ComponentActivity() {
                 SecureHmacStore.save(this, scanned.trim())
                 refreshSecretState()
                 tvStatus.text = getString(R.string.connect_status, "Secret saved. Scanning…")
-                bleManager.start() // if not already started
+                ensureBlePermissions { bleManager.start() }
             } else {
                 tvStatus.text = getString(R.string.connect_status, "QR scan canceled/empty")
             }
@@ -272,5 +272,32 @@ class MainActivity : ComponentActivity() {
                 }
             }
         ).also { it.attach() }
+    }
+
+    private fun ensureBlePermissions(onGranted: () -> Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val need = mutableListOf<String>()
+            if (checkSelfPermission(android.Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED)
+                need += android.Manifest.permission.BLUETOOTH_SCAN
+            if (checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)
+                need += android.Manifest.permission.BLUETOOTH_CONNECT
+            // Optional: wenn du trotzdem Standort brauchst (z.B. ältere APIs fallback):
+            if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
+                need += android.Manifest.permission.ACCESS_FINE_LOCATION
+
+            if (need.isNotEmpty()) {
+                requestPermissions(need.toTypedArray(), 1001)
+            } else onGranted()
+        } else {
+            val need = mutableListOf<String>()
+            if (checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED)
+                need += android.Manifest.permission.ACCESS_COARSE_LOCATION
+            if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
+                need += android.Manifest.permission.ACCESS_FINE_LOCATION
+
+            if (need.isNotEmpty()) {
+                requestPermissions(need.toTypedArray(), 1000)
+            } else onGranted()
+        }
     }
 }
