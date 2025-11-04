@@ -17,6 +17,7 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
+import androidx.camera.core.ExperimentalGetImage
 
 class ScanQrActivity : ComponentActivity() {
 
@@ -48,6 +49,7 @@ class ScanQrActivity : ComponentActivity() {
         }
     }
 
+    @OptIn(ExperimentalGetImage::class)
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
@@ -60,29 +62,25 @@ class ScanQrActivity : ComponentActivity() {
                 .build().apply {
                     setAnalyzer(executor) { imageProxy ->
                         try {
-                            val mediaImage = imageProxy.image
-                            if (mediaImage != null) {
-                                val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-                                BarcodeScanning.getClient().process(image)
-                                    .addOnSuccessListener { barcodes ->
-                                        if (!handled) {
-                                            for (b in barcodes) {
-                                                if (b.valueType == Barcode.TYPE_TEXT || b.valueType == Barcode.TYPE_URL) {
-                                                    val raw = b.rawValue?.trim()
-                                                    if (!raw.isNullOrBlank()) {
-                                                        handled = true
-                                                        deliverResult(raw)
-                                                        break
-                                                    }
+                            val mediaImage = imageProxy.image ?: return@setAnalyzer
+                            val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+                            BarcodeScanning.getClient().process(image)
+                                .addOnSuccessListener { barcodes ->
+                                    if (!handled) {
+                                        for (b in barcodes) {
+                                            if (b.valueType == Barcode.TYPE_TEXT || b.valueType == Barcode.TYPE_URL) {
+                                                val raw = b.rawValue?.trim()
+                                                if (!raw.isNullOrBlank()) {
+                                                    handled = true
+                                                    deliverResult(raw)
+                                                    break
                                                 }
                                             }
                                         }
                                     }
-                                    .addOnFailureListener { /* ignore */ }
-                                    .addOnCompleteListener { imageProxy.close() }
-                            } else {
-                                imageProxy.close()
-                            }
+                                }
+                                .addOnFailureListener { /* ignore */ }
+                                .addOnCompleteListener { imageProxy.close() }
                         } catch (_: Throwable) {
                             imageProxy.close()
                         }

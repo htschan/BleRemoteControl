@@ -8,11 +8,13 @@
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
 .DS_Store
+/app/release
 /build
 /captures
 .externalNativeBuild
 .cxx
 local.properties
+/.kotlin/errors
 
 # Android Studio / IntelliJ
 .idea/
