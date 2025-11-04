@@ -1,4 +1,4 @@
-package com.example.bleremotecontrol
+package ch.sorawit.bleremotecontrol
 
 import org.junit.Test
 

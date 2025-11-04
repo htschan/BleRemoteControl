@@ -1,5 +1,5 @@
 // ble/BleManager.kt
-package com.example.bleremotecontrol.ble
+package ch.sorawit.bleremotecontrol.ble
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -10,7 +10,7 @@ import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
 import androidx.annotation.RequiresPermission
-import com.example.bleremotecontrol.security.SecureHmacStore
+import ch.sorawit.bleremotecontrol.security.SecureHmacStore
 import java.util.*
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec

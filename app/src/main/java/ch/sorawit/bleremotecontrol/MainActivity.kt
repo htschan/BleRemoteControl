@@ -1,4 +1,4 @@
-package com.example.bleremotecontrol
+package ch.sorawit.bleremotecontrol
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -14,9 +14,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
-import com.example.bleremotecontrol.ble.BleManager
-import com.example.bleremotecontrol.security.SecureHmacStore
-import com.example.bleremotecontrol.util.TripleTapGuard
+import ch.sorawit.bleremotecontrol.ble.BleManager
+import ch.sorawit.bleremotecontrol.security.SecureHmacStore
+import ch.sorawit.bleremotecontrol.util.TripleTapGuard
 import androidx.core.view.MenuHost
 import androidx.core.view.MenuProvider
 import androidx.lifecycle.Lifecycle

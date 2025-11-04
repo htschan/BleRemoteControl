@@ -1,4 +1,4 @@
-package com.example.bleremotecontrol.util
+package ch.sorawit.bleremotecontrol.util
 
 import android.os.Handler
 import android.os.Looper

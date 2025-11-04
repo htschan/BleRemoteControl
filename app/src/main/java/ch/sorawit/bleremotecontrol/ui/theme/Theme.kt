@@ -1,4 +1,4 @@
-package com.example.bleremotecontrol.ui.theme
+package ch.sorawit.bleremotecontrol.ui.theme
 
 import android.app.Activity
 import android.os.Build

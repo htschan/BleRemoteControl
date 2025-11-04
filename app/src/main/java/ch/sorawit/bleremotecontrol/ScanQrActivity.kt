@@ -1,4 +1,4 @@
-package com.example.bleremotecontrol
+package ch.sorawit.bleremotecontrol
 
 import android.Manifest
 import android.content.Intent
@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -17,7 +18,6 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
-import androidx.camera.core.ExperimentalGetImage
 
 class ScanQrActivity : ComponentActivity() {
 

@@ -1,4 +1,4 @@
-package com.example.bleremotecontrol.util
+package ch.sorawit.bleremotecontrol.util
 
 object Hex {
     private val HEX = "0123456789abcdef".toCharArray()
