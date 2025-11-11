@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
 import androidx.annotation.RequiresPermission
+import ch.sorawit.bleremotecontrol.BuildConfig
 import ch.sorawit.bleremotecontrol.security.SecureHmacStore
 import java.util.*
 import javax.crypto.Mac
@@ -139,7 +140,7 @@ class BleManager(
         scanner = scn
 
         val filters = listOf(
-            ScanFilter.Builder().setDeviceName("BtBridge").build(),
+            ScanFilter.Builder().setDeviceName(BuildConfig.BLE_DEVICE_NAME).build(),
             ScanFilter.Builder().setServiceUuid(ParcelUuid(serviceUuid)).build()
         )
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
@@ -147,7 +148,7 @@ class BleManager(
             override fun onScanResult(type: Int, res: ScanResult) {
                 val n = res.device.name ?: ""
                 val hasSvc = res.scanRecord?.serviceUuids?.any { it.uuid == serviceUuid } == true
-                if (n == "BtBridge" || hasSvc) {
+                if (n == BuildConfig.BLE_DEVICE_NAME || hasSvc) {
                     onStatusUpdate("Found ${n.ifEmpty { res.device.address }} — connecting…")
                     stopScan()
                     connect(res.device)

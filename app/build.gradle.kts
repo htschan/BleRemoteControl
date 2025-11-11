@@ -1,7 +1,16 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+}
+
+// Read local properties
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localProperties.load(localPropertiesFile.inputStream())
 }
 
 android {
@@ -14,6 +23,10 @@ android {
         targetSdk = 36
         versionCode = 3
         versionName = "1.0.2"
+
+        // Get BLE device name from environment variable, or local.properties, or use default
+        val bleDeviceName = System.getenv("BLE_DEVICE_NAME") ?: localProperties.getProperty("ble.deviceName") ?: "BtBridge"
+        buildConfigField("String", "BLE_DEVICE_NAME", "\"$bleDeviceName\"")
     }
 
     buildFeatures {
