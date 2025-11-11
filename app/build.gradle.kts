@@ -22,7 +22,7 @@ android {
         minSdk = 26              // required for adaptive icons & CameraX
         targetSdk = 36
         versionCode = 3
-        versionName = "1.0.2"
+        versionName = "1.0.3"
 
         // Get BLE device name from environment variable, or local.properties, or use default
         val bleDeviceName = System.getenv("BLE_DEVICE_NAME") ?: localProperties.getProperty("ble.deviceName") ?: "BtBridge"
