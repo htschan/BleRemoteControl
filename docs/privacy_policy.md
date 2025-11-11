@@ -18,4 +18,4 @@ We do not share any information with third parties.
 
 ## Contact Us
 
-If you have any questions about this privacy policy, you can contact us at [Your Email Address]
+If you have any questions about this privacy policy, you can contact us at hans.tschan@gmail.com.
