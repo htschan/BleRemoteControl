@@ -29,17 +29,18 @@ jobs:
       - name: Gradle wrapper permissions
         run: chmod +x ./gradlew
 
-      # Keystore aus Secret decodieren
+      # Keystore from Secret decode
       - name: Decode keystore
         run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > keystore.jks
 
-      # Signiertes AAB bauen (ENV für signingConfig)
+      # Build signed AAB (ENV for signingConfig)
       - name: Build Release Bundle (signed AAB)
         env:
           STORE_FILE: ${{ github.workspace }}/keystore.jks
           STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_ALIAS_PASSWORD }}
+          BLE_DEVICE_NAME: ${{ vars.BLE_DEVICE_NAME }}
         run: ./gradlew --no-daemon clean bundleRelease
 
       - name: Upload Release AAB
