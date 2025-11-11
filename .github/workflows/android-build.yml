@@ -24,18 +24,23 @@ jobs:
           cache: gradle
 
       - name: Set ANDROID_SDK_ROOT
-        run: echo "ANDROID_SDK_ROOT=$RUNNER_TEMP/android-sdk" >> $GITHUB_ENV
+        run: |
+          echo "ANDROID_SDK_ROOT=$RUNNER_TEMP/android-sdk" >> $GITHUB_ENV
 
       - name: Gradle wrapper permissions
         run: chmod +x ./gradlew
 
       # Keystore from Secret decode
       - name: Decode keystore
-        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > keystore.jks
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > keystore.jks
 
       # Print BLE device name to log
       - name: Log BLE Device Name
-        run: echo "BLE_DEVICE_NAME is: ${{ vars.BLE_DEVICE_NAME }}"
+        env:
+          THE_NAME: ${{ vars.BLE_DEVICE_NAME }}
+        run: |
+          echo "BLE_DEVICE_NAME is: $THE_NAME"
 
       # Build signed AAB (ENV for signingConfig)
       - name: Build Release Bundle (signed AAB)
