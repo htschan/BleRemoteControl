@@ -8,13 +8,13 @@ import android.widget.Button
 class TripleTapGuard(
     private val button: Button,
     private val requiredTaps: Int = 3,
-    private val windowMs: Long = 2500,        // Time window for all taps
-    private val onConfirmed: () -> Unit,
+    private val windowMs: Long = 2500, // Time window to complete all taps
+    private val onArmed: () -> Unit,
     private val onUpdateStatus: (String) -> Unit = {}
 ) {
     private var taps = 0
     private val main = Handler(Looper.getMainLooper())
-    private var confirmationRunnable: Runnable? = null
+    private var resetRunnable: Runnable? = null
     private var originalText: CharSequence = button.text
     private var busy = false
 
@@ -29,8 +29,7 @@ class TripleTapGuard(
     fun setBusy(isBusy: Boolean) {
         busy = isBusy
         button.isEnabled = !isBusy
-        if (!isBusy) {
-            // When no longer busy, ensure the guard is in a clean state.
+        if (!isBusy && taps > 0) {
             reset()
         }
     }
@@ -38,40 +37,31 @@ class TripleTapGuard(
     fun reset() {
         taps = 0
         button.text = originalText
-        confirmationRunnable?.let { main.removeCallbacks(it) }
-        confirmationRunnable = null
+        resetRunnable?.let { main.removeCallbacks(it) }
+        resetRunnable = null
     }
 
     private fun registerTap() {
-        taps++
-        button.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-
-        if (taps == 1) {
-            // First tap starts the confirmation window
-            scheduleConfirmation()
+        // On the first tap, start a timer to reset the guard.
+        if (taps == 0) {
+            resetRunnable = Runnable {
+                onUpdateStatus("Action cancelled (timed out).")
+                reset()
+            }.also { main.postDelayed(it, windowMs) }
         }
 
+        taps++
+        button.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         button.text = buildProgressLabel(originalText.toString(), taps, requiredTaps)
         onUpdateStatus("$taps/$requiredTaps taps registered.")
-    }
 
-    private fun scheduleConfirmation() {
-        confirmationRunnable = Runnable {
-            val finalTapCount = taps
-            if (finalTapCount == requiredTaps) {
-                // Correct number of taps, execute the action.
-                onUpdateStatus("Sending command...")
-                reset()
-                setBusy(true) // Disable button during BLE operation.
-                onConfirmed()
-            } else {
-                // Wrong number of taps.
-                if (finalTapCount > 0) {
-                    onUpdateStatus("Action cancelled: $finalTapCount of $requiredTaps taps. Expected $requiredTaps.")
-                }
-                reset()
-            }
-        }.also { main.postDelayed(it, windowMs) }
+        if (taps >= requiredTaps) {
+            // Reached the required number of taps, so arm immediately.
+            resetRunnable?.let { main.removeCallbacks(it) }
+            resetRunnable = null
+            onUpdateStatus("Armed! Press Execute.")
+            onArmed()
+        }
     }
 
     private fun buildProgressLabel(base: String, taps: Int, required: Int): String {

@@ -37,10 +37,8 @@ jobs:
 
       # Print BLE device name to log
       - name: Log BLE Device Name
-        env:
-          THE_NAME: ${{ vars.BLE_DEVICE_NAME }}
         run: |
-          echo "BLE_DEVICE_NAME is: $THE_NAME"
+          echo "BLE_DEVICE_NAME is: ${{ vars.BLE_DEVICE_NAME }}"
 
       # Build signed AAB (ENV for signingConfig)
       - name: Build Release Bundle (signed AAB)

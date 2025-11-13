@@ -34,19 +34,24 @@ class BleManager(
     private var scanner: BluetoothLeScanner? = null
     private var scanCallback: ScanCallback? = null
 
-    private var gatt: BluetoothGatt? = null
+    var gatt: BluetoothGatt? = null
+        private set
+
     private var writeChar: BluetoothGattCharacteristic? = null
     private var notifyChar: BluetoothGattCharacteristic? = null
 
     private val serviceUuid = UUID.fromString("4fafc201-1fb5-459e-8fcc-c5c9c331914b")
 
-    // Latest nonce as HEX string (ESP32 sends hex via notify)
+    val isReady: Boolean
+        get() = gatt != null
+
     @Volatile private var latestNonceHex: String? = null
     @Volatile private var lastNonceMs: Long = 0L
+    @Volatile private var isAwaitingNonceAfterCommand: Boolean = false
 
     fun start() = startScan()
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    @SuppressLint("MissingPermission")
     fun stop() {
         try { stopScan() } catch (_: Throwable) {}
         try { gatt?.disconnect() } catch (_: Throwable) {}
@@ -55,7 +60,6 @@ class BleManager(
         onReady(false)
     }
 
-    // --- Public: single-frame command ---
     fun sendSingleFrameCommand(command: String) {
         val nonceHex = latestNonceHex
         val canWrite = (writeChar != null && gatt != null)
@@ -72,20 +76,21 @@ class BleManager(
         val macHex = try {
             hmac8Hex("$command|$nonceHex", keyBytes)
         } finally {
-            // wipe key material best-effort
-            for (i in keyBytes.indices) keyBytes[i] = 0
+            keyBytes.fill(0)
         }
 
         val frame = "F|$command|$nonceHex|$macHex"
+        Log.d(TAG, "Writing frame of length ${frame.toByteArray().size}: '$frame'")
+
+        isAwaitingNonceAfterCommand = true
         writeFrame(frame)
+
         onStatusUpdate("Sent single-frame: $command")
 
         latestNonceHex = null
-        onReady(false) // deactivate buttons, wait for new Nonce
-        requestNonce()
+        onReady(false)
     }
 
-    // --- Compat helpers for API 26–32 vs 33+ ---
     @SuppressLint("MissingPermission")
     private fun writeCharacteristicCompat(
         g: BluetoothGatt,
@@ -99,7 +104,7 @@ class BleManager(
         } else {
             ch.writeType = writeType
             ch.value = payload
-            g.writeCharacteristic(ch) // boolean
+            g.writeCharacteristic(ch)
         }
     }
 
@@ -113,7 +118,7 @@ class BleManager(
             g.writeDescriptor(d, payload) == BluetoothStatusCodes.SUCCESS
         } else {
             d.value = payload
-            g.writeDescriptor(d) // boolean
+            g.writeDescriptor(d)
         }
     }
 
@@ -124,15 +129,16 @@ class BleManager(
 
         val commandBytes = COMMAND_GET_NONCE.toByteArray(Charsets.UTF_8)
         val writeType =
-            if ((characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0)
+            if ((characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE) != 0) {
+                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            } else {
                 BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-            else BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            }
 
         val ok = writeCharacteristicCompat(gattDevice, characteristic, commandBytes, writeType)
         if (ok) onStatusUpdate("Requested new nonce…") else onError("Nonce request write failed")
     }
 
-    // --- BLE plumbing (scan/connect/discover/notify) ---
     @SuppressLint("MissingPermission")
     private fun startScan() {
         if (!adapter.isEnabled) { onError("Bluetooth is off"); return }
@@ -176,9 +182,8 @@ class BleManager(
             }
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    onStatusUpdate("Connected; discovering services…")
-                    gatt.requestMtu(247) // enables single-frame headroom
-                    gatt.discoverServices()
+                    onStatusUpdate("Connected. Negotiating MTU…")
+                    gatt.requestMtu(247)
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     onStatusUpdate("Disconnected"); onReady(false); startScan()
@@ -186,22 +191,27 @@ class BleManager(
             }
         }
 
+        @SuppressLint("MissingPermission")
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-            Log.d(TAG, "MTU=$mtu status=$status")
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d(TAG, "MTU changed to $mtu. Discovering services…")
+                onStatusUpdate("MTU OK. Discovering services…")
+                gatt.discoverServices()
+            } else {
+                onError("MTU negotiation failed: $status")
+                gatt.disconnect()
+            }
         }
 
         @SuppressLint("MissingPermission")
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                onError("Service discovery failed: $status")
-                return
+                onError("Service discovery failed: $status"); return
             }
 
             val service = gatt.getService(serviceUuid)
             if (service == null) {
-                onError("Required service not found")
-                gatt.disconnect()
-                return
+                onError("Required service not found"); gatt.disconnect(); return
             }
 
             val wChar = service.characteristics.firstOrNull {
@@ -214,40 +224,33 @@ class BleManager(
             }
 
             if (wChar == null || nChar == null) {
-                onError("Required characteristics not found")
-                gatt.disconnect()
-                return
+                onError("Required characteristics not found"); gatt.disconnect(); return
             }
 
             writeChar = wChar
             notifyChar = nChar
 
             if (!gatt.setCharacteristicNotification(nChar, true)) {
-                onError("Failed to enable notifications")
-                gatt.disconnect()
-                return
+                onError("Failed to enable notifications"); gatt.disconnect(); return
             }
 
             val cccd = nChar.getDescriptor(CCCD_UUID)
             if (cccd == null) {
-                onError("CCCD descriptor not found")
-                gatt.disconnect()
-                return
+                onError("CCCD descriptor not found"); gatt.disconnect(); return
             }
 
-            // Compat write for CCCD
             val ok = writeDescriptorCompat(gatt, cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
             if (!ok) onError("Failed to write CCCD descriptor")
-            // result will be reported in onDescriptorWrite
         }
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS) onError("CCCD write failed: $status")
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                requestNonce()
+            } else {
+                onError("CCCD write failed: $status")
+            }
         }
 
-        // --- Notifications: override BOTH signatures for API compatibility ---
-
-        // API 33+ callback (value is passed directly)
         @SuppressLint("MissingPermission")
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt,
@@ -258,24 +261,38 @@ class BleManager(
             if (characteristic.uuid == notifyChar?.uuid) processNotifyValue(value)
         }
 
-        // Pre-API 33 callback (read value from characteristic.value)
         @Suppress("DEPRECATION")
         @SuppressLint("MissingPermission")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             super.onCharacteristicChanged(gatt, characteristic)
             if (characteristic.uuid == notifyChar?.uuid) {
-                val v = characteristic.value ?: return
-                processNotifyValue(v)
+                processNotifyValue(characteristic.value ?: return)
             }
         }
 
         override fun onCharacteristicWrite(gatt: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS) onError("Write failed: $status")
+            if (isAwaitingNonceAfterCommand) {
+                isAwaitingNonceAfterCommand = false
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    requestNonce()
+                } else {
+                    onError("Command write failed: $status")
+                }
+            } else if (status != BluetoothGatt.GATT_SUCCESS) {
+                onError("Write failed: $status")
+            }
         }
     }
 
     private fun processNotifyValue(value: ByteArray) {
-        val s = value.toString(Charsets.UTF_8).trim()
+        // Find the first null character, as C-style strings are often null-terminated
+        val nullIndex = value.indexOf(0.toByte())
+        // If a null is found, consider only the part of the array before it
+        val effectiveValue = if (nullIndex != -1) value.copyOfRange(0, nullIndex) else value
+
+        // Convert the sanitized byte array to a string and trim whitespace
+        val s = effectiveValue.toString(Charsets.UTF_8).trim()
+
         if (s.isNotEmpty()) {
             latestNonceHex = s
             lastNonceMs = System.currentTimeMillis()
@@ -290,15 +307,16 @@ class BleManager(
         val characteristic = writeChar ?: return onError("Write characteristic not ready")
 
         val writeType =
-            if ((characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0)
+            if ((characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE) != 0) {
+                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            } else {
                 BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-            else BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            }
 
         val ok = writeCharacteristicCompat(gattDevice, characteristic, frame.toByteArray(Charsets.UTF_8), writeType)
         if (!ok) onError("Write enqueue failed")
     }
 
-    // --- Crypto helpers ---
     private fun hmac8Hex(message: String, keyBytes: ByteArray): String {
         val mac = Mac.getInstance("HmacSHA256")
         mac.init(SecretKeySpec(keyBytes, "HmacSHA256"))
