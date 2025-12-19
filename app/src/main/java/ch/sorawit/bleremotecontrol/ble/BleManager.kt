@@ -23,7 +23,7 @@ class BleManager(
     private val onError: (String) -> Unit,
 ) {
     companion object {
-        private const val COMMAND_GET_NONCE = "GET_NONCE"
+        private const val COMMAND_GET_NONCE = "get_nonce" // Corrected to match server
         private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     }
     private val TAG = "BleManager"
@@ -80,8 +80,6 @@ class BleManager(
         }
 
         val frame = "F|$command|$nonceHex|$macHex"
-        Log.d(TAG, "Writing frame of length ${frame.toByteArray().size}: '$frame'")
-
         isAwaitingNonceAfterCommand = true
         writeFrame(frame)
 
@@ -285,12 +283,8 @@ class BleManager(
     }
 
     private fun processNotifyValue(value: ByteArray) {
-        // Find the first null character, as C-style strings are often null-terminated
         val nullIndex = value.indexOf(0.toByte())
-        // If a null is found, consider only the part of the array before it
         val effectiveValue = if (nullIndex != -1) value.copyOfRange(0, nullIndex) else value
-
-        // Convert the sanitized byte array to a string and trim whitespace
         val s = effectiveValue.toString(Charsets.UTF_8).trim()
 
         if (s.isNotEmpty()) {
