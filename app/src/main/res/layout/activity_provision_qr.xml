@@ -24,6 +24,22 @@
             android:autofillHints=""
             android:layout_marginTop="8dp" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="BLE Device Name"
+            android:textAppearance="?android:attr/textAppearanceMedium"
+            android:layout_marginTop="16dp" />
+
+        <EditText
+            android:id="@+id/etDeviceName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="BtBridge"
+            android:inputType="textNoSuggestions"
+            android:autofillHints=""
+            android:layout_marginTop="8dp" />
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

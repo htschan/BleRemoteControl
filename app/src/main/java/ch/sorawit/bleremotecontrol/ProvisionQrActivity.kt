@@ -12,6 +12,7 @@ import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.core.content.FileProvider
+import ch.sorawit.bleremotecontrol.security.DeviceNameStore
 import ch.sorawit.bleremotecontrol.security.SecureHmacStore
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
@@ -23,6 +24,7 @@ import java.io.FileOutputStream
 class ProvisionQrActivity : ComponentActivity() {
 
     private lateinit var etSecret: EditText
+    private lateinit var etDeviceName: EditText
     private lateinit var btnOk: Button
     private lateinit var btnReset: Button
     private lateinit var imgQr: ImageView
@@ -36,6 +38,7 @@ class ProvisionQrActivity : ComponentActivity() {
         setContentView(R.layout.activity_provision_qr)
 
         etSecret = findViewById(R.id.etSecret)
+        etDeviceName = findViewById(R.id.etDeviceName)
         btnOk = findViewById(R.id.btnOk)
         btnReset = findViewById(R.id.btnReset)
         imgQr = findViewById(R.id.imgQr)
@@ -44,24 +47,36 @@ class ProvisionQrActivity : ComponentActivity() {
         imgQr.setImageDrawable(null)
         btnShare.isEnabled = false
 
+        // Load current device name
+        etDeviceName.setText(DeviceNameStore.get(this))
+
         btnOk.setOnClickListener {
-            val raw = etSecret.text.toString().trim()
-            if (!uuidRegex.matches(raw)) {
-                Toast.makeText(this, "Please enter a valid UUID", Toast.LENGTH_SHORT).show()
+            // Save the device name
+            val deviceName = etDeviceName.text.toString().trim()
+            if (deviceName.isNotBlank()) {
+                DeviceNameStore.save(this, deviceName)
+            } else {
+                Toast.makeText(this, "Device name cannot be empty", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            // This activity no longer saves the key. It only generates the QR code.
-            // SecureHmacStore.save(this, raw)
+            // Handle the HMAC secret
+            val rawSecret = etSecret.text.toString().trim()
+            if (rawSecret.isNotBlank()) {
+                if (!uuidRegex.matches(rawSecret)) {
+                    Toast.makeText(this, "Please enter a valid UUID", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                SecureHmacStore.save(this, rawSecret)
+                generateAndShowQr(rawSecret)
+            }
 
-            // Mask and lock input field (only after OK)
+            // Mask and lock input fields
             etSecret.transformationMethod = PasswordTransformationMethod.getInstance()
             etSecret.isEnabled = false
+            etDeviceName.isEnabled = false
 
-            // Generate QR
-            generateAndShowQr(raw)
-
-            Toast.makeText(this, "QR code generated", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Settings saved", Toast.LENGTH_SHORT).show()
         }
 
         btnShare.setOnClickListener {
@@ -75,20 +90,14 @@ class ProvisionQrActivity : ComponentActivity() {
             etSecret.text?.clear()
             etSecret.transformationMethod = null
             etSecret.isEnabled = true
+            etDeviceName.isEnabled = true
             imgQr.setImageDrawable(null)
             btnShare.isEnabled = false
             lastQrBitmap = null
         }
     }
 
-    private fun maskEditText() {
-        etSecret.transformationMethod = PasswordTransformationMethod.getInstance()
-        etSecret.isEnabled = false
-        etSecret.setSelection(etSecret.text?.length ?: 0)
-    }
-
     private fun generateAndShowQr(content: String) {
-        // QR content = exactly the UUID (plain text)
         val size = 800 // px
         val hints = mapOf(
             EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M,
