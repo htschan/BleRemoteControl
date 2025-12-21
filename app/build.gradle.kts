@@ -21,8 +21,8 @@ android {
         applicationId = "ch.sorawit.bleremotecontrol"
         minSdk = 26              // required for adaptive icons & CameraX
         targetSdk = 36
-        versionCode = 9
-        versionName = "1.0.9"
+        versionCode = 10
+        versionName = "1.0.10"
 
         // Get BLE device name from environment variable, or local.properties, or use default
         val bleDeviceName = System.getenv("BLE_DEVICE_NAME") ?: localProperties.getProperty("ble.deviceName") ?: "BtBridge"

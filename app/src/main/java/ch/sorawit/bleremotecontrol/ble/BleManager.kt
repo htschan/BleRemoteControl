@@ -11,6 +11,7 @@ import android.os.ParcelUuid
 import android.util.Log
 import androidx.annotation.RequiresPermission
 import ch.sorawit.bleremotecontrol.BuildConfig
+import ch.sorawit.bleremotecontrol.security.DeviceNameStore
 import ch.sorawit.bleremotecontrol.security.SecureHmacStore
 import java.util.*
 import javax.crypto.Mac
@@ -143,8 +144,9 @@ class BleManager(
         val scn = adapter.bluetoothLeScanner ?: run { onError("No BLE scanner"); return }
         scanner = scn
 
+        val deviceName = DeviceNameStore.get(context)
         val filters = listOf(
-            ScanFilter.Builder().setDeviceName(BuildConfig.BLE_DEVICE_NAME).build(),
+            ScanFilter.Builder().setDeviceName(deviceName).build(),
             ScanFilter.Builder().setServiceUuid(ParcelUuid(serviceUuid)).build()
         )
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
@@ -152,7 +154,7 @@ class BleManager(
             override fun onScanResult(type: Int, res: ScanResult) {
                 val n = res.device.name ?: ""
                 val hasSvc = res.scanRecord?.serviceUuids?.any { it.uuid == serviceUuid } == true
-                if (n == BuildConfig.BLE_DEVICE_NAME || hasSvc) {
+                if (n == deviceName || hasSvc) {
                     onStatusUpdate("Found ${n.ifEmpty { res.device.address }} — connecting…")
                     stopScan()
                     connect(res.device)
@@ -160,7 +162,7 @@ class BleManager(
             }
             override fun onScanFailed(errorCode: Int) = onError("Scan failed: $errorCode")
         }
-        onStatusUpdate("Scanning…")
+        onStatusUpdate("Scanning for '$deviceName'…")
         scn.startScan(filters, settings, scanCallback)
     }
 
