@@ -1,16 +1,16 @@
 // ble/BleManager.kt
 package ch.sorawit.bleremotecontrol.ble
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelUuid
 import android.util.Log
-import androidx.annotation.RequiresPermission
-import ch.sorawit.bleremotecontrol.BuildConfig
+import androidx.annotation.RequiresApi
 import ch.sorawit.bleremotecontrol.security.DeviceNameStore
 import ch.sorawit.bleremotecontrol.security.SecureHmacStore
 import java.util.*
@@ -24,13 +24,17 @@ class BleManager(
     private val onError: (String) -> Unit,
 ) {
     companion object {
-        private const val COMMAND_GET_NONCE = "get_nonce" // Corrected to match server
+        private const val COMMAND_GET_NONCE = "get_nonce"
+        private val SERVICE_UUID: UUID = UUID.fromString("4fafc201-1fb5-459e-8fcc-c5c9c331914b")
+        private val RX_CHAR_UUID: UUID = UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26a8") // Write
+        private val TX_CHAR_UUID: UUID = UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26a9") // Notify
         private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     }
-    private val TAG = "BleManager"
+    private val tag = "BleManager"
 
     private val btMgr = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val adapter: BluetoothAdapter = btMgr.adapter
+    private val handler = Handler(Looper.getMainLooper())
 
     private var scanner: BluetoothLeScanner? = null
     private var scanCallback: ScanCallback? = null
@@ -41,36 +45,45 @@ class BleManager(
     private var writeChar: BluetoothGattCharacteristic? = null
     private var notifyChar: BluetoothGattCharacteristic? = null
 
-    private val serviceUuid = UUID.fromString("4fafc201-1fb5-459e-8fcc-c5c9c331914b")
+    private var readyState: Boolean = false
+        set(value) {
+            if (field != value) {
+                field = value
+                handler.post { onReady(value) }
+            }
+        }
 
-    val isReady: Boolean
-        get() = gatt != null
+    val isManagerReady: Boolean
+        get() = readyState
 
     @Volatile private var latestNonceHex: String? = null
     @Volatile private var lastNonceMs: Long = 0L
     @Volatile private var isAwaitingNonceAfterCommand: Boolean = false
 
-    fun start() = startScan()
+    fun start() {
+        startScan()
+    }
 
     @SuppressLint("MissingPermission")
     fun stop() {
+        handler.removeCallbacksAndMessages(null)
         try { stopScan() } catch (_: Throwable) {}
         try { gatt?.disconnect() } catch (_: Throwable) {}
         try { gatt?.close() } catch (_: Throwable) {}
         gatt = null; writeChar = null; notifyChar = null
-        onReady(false)
+        readyState = false
     }
 
     fun sendSingleFrameCommand(command: String) {
         val nonceHex = latestNonceHex
         val canWrite = (writeChar != null && gatt != null)
         val fresh = nonceHex != null && (System.currentTimeMillis() - lastNonceMs) <= 10_000
-        if (!canWrite) { onError("Not connected"); return }
-        if (!fresh) { onError("No fresh nonce yet"); return }
+        if (!canWrite) { postError("Not connected"); return }
+        if (!fresh) { postError("No fresh nonce yet"); return }
 
         val keyBytes = SecureHmacStore.getBytes(context)
         if (keyBytes == null || keyBytes.isEmpty()) {
-            onError("Secret key missing. Please scan QR.")
+            postError("Secret key missing. Please scan QR.")
             return
         }
 
@@ -84,10 +97,18 @@ class BleManager(
         isAwaitingNonceAfterCommand = true
         writeFrame(frame)
 
-        onStatusUpdate("Sent single-frame: $command")
+        postStatus("Sent single-frame: $command")
 
         latestNonceHex = null
-        onReady(false)
+        readyState = false
+    }
+
+    private fun postStatus(message: String) {
+        handler.post { onStatusUpdate(message) }
+    }
+
+    private fun postError(message: String) {
+        handler.post { onError(message) }
     }
 
     @SuppressLint("MissingPermission")
@@ -102,7 +123,9 @@ class BleManager(
             status == BluetoothStatusCodes.SUCCESS
         } else {
             ch.writeType = writeType
+            @Suppress("DEPRECATION")
             ch.value = payload
+            @Suppress("DEPRECATION")
             g.writeCharacteristic(ch)
         }
     }
@@ -113,56 +136,72 @@ class BleManager(
         d: BluetoothGattDescriptor,
         payload: ByteArray
     ): Boolean {
+        Log.i(tag, "writeDescriptorCompat: descriptor=${d.uuid}, payload=${bytesToHex(payload)}")
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            g.writeDescriptor(d, payload) == BluetoothStatusCodes.SUCCESS
+            val result = g.writeDescriptor(d, payload) == BluetoothStatusCodes.SUCCESS
+            Log.i(tag, "writeDescriptorCompat (T+): result=$result")
+            result
         } else {
+            @Suppress("DEPRECATION")
             d.value = payload
-            g.writeDescriptor(d)
+            @Suppress("DEPRECATION")
+            val result = g.writeDescriptor(d)
+            Log.i(tag, "writeDescriptorCompat (pre-T): result=$result")
+            result
         }
     }
 
     @SuppressLint("MissingPermission")
     fun requestNonce() {
-        val gattDevice = gatt ?: return onError("Not connected")
-        val characteristic = writeChar ?: return onError("Write characteristic not available")
+        Log.i(tag, "Requesting nonce...")
+        val gattDevice = gatt ?: run { postError("Not connected"); Log.e(tag, "requestNonce: gatt is null"); return }
+        val characteristic = writeChar ?: run { postError("Write characteristic not available"); Log.e(tag, "requestNonce: writeChar is null"); return }
 
         val commandBytes = COMMAND_GET_NONCE.toByteArray(Charsets.UTF_8)
-        val writeType =
-            if ((characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE) != 0) {
-                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            } else {
-                BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-            }
+        val writeType = if ((characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE) != 0) {
+            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        } else {
+            BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        }
 
+        Log.i(tag, "Writing '$COMMAND_GET_NONCE' to ${characteristic.uuid} with writeType=$writeType")
         val ok = writeCharacteristicCompat(gattDevice, characteristic, commandBytes, writeType)
-        if (ok) onStatusUpdate("Requested new nonce…") else onError("Nonce request write failed")
+        if (ok) {
+            postStatus("Requested new nonce…")
+            Log.i(tag, "Nonce request write operation initiated successfully.")
+        } else {
+            postError("Nonce request write failed")
+            Log.e(tag, "Nonce request write operation failed to initiate.")
+        }
     }
 
     @SuppressLint("MissingPermission")
     private fun startScan() {
-        if (!adapter.isEnabled) { onError("Bluetooth is off"); return }
-        val scn = adapter.bluetoothLeScanner ?: run { onError("No BLE scanner"); return }
+        if (!adapter.isEnabled) { postError("Bluetooth is off"); return }
+        val scn = adapter.bluetoothLeScanner ?: run { postError("No BLE scanner"); return }
         scanner = scn
 
         val deviceName = DeviceNameStore.get(context)
         val filters = listOf(
             ScanFilter.Builder().setDeviceName(deviceName).build(),
-            ScanFilter.Builder().setServiceUuid(ParcelUuid(serviceUuid)).build()
+            ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build()
         )
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
         scanCallback = object : ScanCallback() {
             override fun onScanResult(type: Int, res: ScanResult) {
                 val n = res.device.name ?: ""
-                val hasSvc = res.scanRecord?.serviceUuids?.any { it.uuid == serviceUuid } == true
+                val hasSvc = res.scanRecord?.serviceUuids?.any { it.uuid == SERVICE_UUID } == true
                 if (n == deviceName || hasSvc) {
-                    onStatusUpdate("Found ${n.ifEmpty { res.device.address }} — connecting…")
+                    postStatus("Found ${n.ifEmpty { res.device.address }} — connecting…")
                     stopScan()
                     connect(res.device)
                 }
             }
-            override fun onScanFailed(errorCode: Int) = onError("Scan failed: $errorCode")
+            override fun onScanFailed(errorCode: Int) {
+                postError("Scan failed: $errorCode")
+            }
         }
-        onStatusUpdate("Scanning for '$deviceName'…")
+        postStatus("Scanning for '$deviceName'…")
         scn.startScan(filters, settings, scanCallback)
     }
 
@@ -178,15 +217,15 @@ class BleManager(
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                onError("GATT error $status"); stop(); return
+                postError("GATT error $status"); stop(); return
             }
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    onStatusUpdate("Connected. Negotiating MTU…")
-                    gatt.requestMtu(247)
+                    postStatus("Connected. Requesting MTU...")
+                    gatt.requestMtu(517) // Request MTU required by server
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    onStatusUpdate("Disconnected"); onReady(false); startScan()
+                    postStatus("Disconnected"); readyState = false; startScan()
                 }
             }
         }
@@ -194,11 +233,10 @@ class BleManager(
         @SuppressLint("MissingPermission")
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                Log.d(TAG, "MTU changed to $mtu. Discovering services…")
-                onStatusUpdate("MTU OK. Discovering services…")
+                postStatus("MTU changed to $mtu. Discovering services...")
                 gatt.discoverServices()
             } else {
-                onError("MTU negotiation failed: $status")
+                postError("MTU negotiation failed. Status: $status")
                 gatt.disconnect()
             }
         }
@@ -206,111 +244,120 @@ class BleManager(
         @SuppressLint("MissingPermission")
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                onError("Service discovery failed: $status"); return
+                postError("Service discovery failed: $status"); return
             }
 
-            val service = gatt.getService(serviceUuid)
+            val service = gatt.getService(SERVICE_UUID)
             if (service == null) {
-                onError("Required service not found"); gatt.disconnect(); return
+                postError("Required service not found"); gatt.disconnect(); return
             }
 
-            val wChar = service.characteristics.firstOrNull {
-                val p = it.properties
-                (p and BluetoothGattCharacteristic.PROPERTY_WRITE != 0) ||
-                        (p and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0)
-            }
-            val nChar = service.characteristics.firstOrNull {
-                it.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0
-            }
+            val wChar = service.getCharacteristic(RX_CHAR_UUID)
+            val nChar = service.getCharacteristic(TX_CHAR_UUID)
 
             if (wChar == null || nChar == null) {
-                onError("Required characteristics not found"); gatt.disconnect(); return
+                postError("Required characteristics not found"); gatt.disconnect(); return
             }
 
             writeChar = wChar
             notifyChar = nChar
 
+            Log.i(tag, "Enabling notifications for ${nChar.uuid}")
             if (!gatt.setCharacteristicNotification(nChar, true)) {
-                onError("Failed to enable notifications"); gatt.disconnect(); return
+                postError("Failed to enable notifications"); gatt.disconnect(); return
             }
 
             val cccd = nChar.getDescriptor(CCCD_UUID)
             if (cccd == null) {
-                onError("CCCD descriptor not found"); gatt.disconnect(); return
+                postError("CCCD descriptor not found"); gatt.disconnect(); return
             }
 
-            val ok = writeDescriptorCompat(gatt, cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-            if (!ok) onError("Failed to write CCCD descriptor")
+            Log.i(tag, "Writing to CCCD to enable notifications/indications...")
+            val payload = if ((nChar.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0) {
+                BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+            } else {
+                BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            }
+            val ok = writeDescriptorCompat(gatt, cccd, payload)
+            if (!ok) {
+                postError("Failed to write CCCD descriptor")
+            }
         }
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
+            Log.i(tag, "onDescriptorWrite: status=$status, descriptor=${d.uuid}")
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                requestNonce()
+                if (d.uuid == CCCD_UUID) {
+                    Log.i(tag, "CCCD write successful. Posting delayed nonce request (500ms).")
+                    handler.postDelayed({ requestNonce() }, 500)
+                }
             } else {
-                onError("CCCD write failed: $status")
+                postError("CCCD write failed: $status")
             }
         }
 
+        @RequiresApi(Build.VERSION_CODES.TIRAMISU)
         @SuppressLint("MissingPermission")
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray
         ) {
-            super.onCharacteristicChanged(gatt, characteristic, value)
-            if (characteristic.uuid == notifyChar?.uuid) processNotifyValue(value)
+            if (characteristic.uuid == TX_CHAR_UUID) {
+                processNotifyValue(value)
+            }
         }
 
         @Suppress("DEPRECATION")
         @SuppressLint("MissingPermission")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-            super.onCharacteristicChanged(gatt, characteristic)
-            if (characteristic.uuid == notifyChar?.uuid) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return
+            if (characteristic.uuid == TX_CHAR_UUID) {
+                @Suppress("DEPRECATION")
                 processNotifyValue(characteristic.value ?: return)
             }
         }
 
         override fun onCharacteristicWrite(gatt: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) {
+            Log.i(tag, "onCharacteristicWrite: status=$status, characteristic=${ch.uuid}")
             if (isAwaitingNonceAfterCommand) {
                 isAwaitingNonceAfterCommand = false
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     requestNonce()
                 } else {
-                    onError("Command write failed: $status")
+                    postError("Command write failed: $status")
                 }
             } else if (status != BluetoothGatt.GATT_SUCCESS) {
-                onError("Write failed: $status")
+                postError("Write failed: $status")
             }
         }
     }
 
     private fun processNotifyValue(value: ByteArray) {
-        val nullIndex = value.indexOf(0.toByte())
-        val effectiveValue = if (nullIndex != -1) value.copyOfRange(0, nullIndex) else value
-        val s = effectiveValue.toString(Charsets.UTF_8).trim()
-
+        val s = value.toString(Charsets.UTF_8).trim()
         if (s.isNotEmpty()) {
             latestNonceHex = s
             lastNonceMs = System.currentTimeMillis()
-            onReady(true)
-            onStatusUpdate("Nonce received (${s.length} hex chars)")
+            readyState = true
+            postStatus("Nonce received (${s.length} hex chars)")
+        } else {
+            Log.w(tag, "Received empty or whitespace-only nonce. Raw value: ${bytesToHex(value)}")
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun writeFrame(frame: String) {
-        val gattDevice = gatt ?: return onError("Not connected")
-        val characteristic = writeChar ?: return onError("Write characteristic not ready")
+        val gattDevice = gatt ?: return postError("Not connected")
+        val characteristic = writeChar ?: return postError("Write characteristic not ready")
 
-        val writeType =
-            if ((characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE) != 0) {
-                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            } else {
-                BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-            }
+        val writeType = if ((characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE) != 0) {
+            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        } else {
+            BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        }
 
         val ok = writeCharacteristicCompat(gattDevice, characteristic, frame.toByteArray(Charsets.UTF_8), writeType)
-        if (!ok) onError("Write enqueue failed")
+        if (!ok) postError("Write enqueue failed")
     }
 
     private fun hmac8Hex(message: String, keyBytes: ByteArray): String {

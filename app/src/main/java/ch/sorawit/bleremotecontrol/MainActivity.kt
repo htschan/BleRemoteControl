@@ -7,8 +7,6 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.widget.Button
 import android.widget.RelativeLayout
 import android.widget.TextView
@@ -18,10 +16,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import ch.sorawit.bleremotecontrol.ble.BleManager
 import ch.sorawit.bleremotecontrol.security.SecureHmacStore
-import ch.sorawit.bleremotecontrol.util.TripleTapGuard
-import androidx.core.view.MenuHost
-import androidx.core.view.MenuProvider
-import androidx.lifecycle.Lifecycle
 
 class MainActivity : ComponentActivity() {
 
@@ -29,30 +23,15 @@ class MainActivity : ComponentActivity() {
     private lateinit var tvStatus: TextView
     private lateinit var btnOpen: Button
     private lateinit var btnClose: Button
-    private lateinit var btnExecute: Button
     private lateinit var btnRescan: Button
 
     private lateinit var bleManager: BleManager
-
-    private lateinit var openGuard: TripleTapGuard
-    private lateinit var closeGuard: TripleTapGuard
-
     private lateinit var tvSecretHint: TextView
-
     private lateinit var btnScanKey: Button
 
-    private var armedCommand: String? = null
-    private val armingHandler = Handler(Looper.getMainLooper())
-    private var disarmRunnable: Runnable? = null
-
     // --- PERMISSION HANDLING ---
-
     private val requiredPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        arrayOf(
-            Manifest.permission.BLUETOOTH_SCAN,
-            Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.BLUETOOTH_ADVERTISE
-        )
+        arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
     } else {
         arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
     }
@@ -62,11 +41,10 @@ class MainActivity : ComponentActivity() {
             if (permissions.values.all { it }) {
                 startBleProcess()
             } else {
-                tvStatus.text = "Permissions required. Please grant permissions in settings."
+                tvStatus.text = "Permissions are required to use this app."
             }
         }
 
-    // --- LIFECYCLE ---
     private val qrLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { res ->
@@ -75,13 +53,7 @@ class MainActivity : ComponentActivity() {
             if (!scanned.isNullOrBlank()) {
                 SecureHmacStore.save(this, scanned.trim())
                 refreshSecretState()
-                tvStatus.text = getString(R.string.connect_status, "Secret saved. Scanning…")
-                ensureBlePermissions { bleManager.start() }
-            } else {
-                tvStatus.text = getString(R.string.connect_status, "QR scan canceled/empty")
             }
-        } else {
-            tvStatus.text = getString(R.string.connect_status, "QR scan canceled")
         }
     }
 
@@ -91,9 +63,19 @@ class MainActivity : ComponentActivity() {
         refreshSecretState()
     }
 
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        // --- View Initialization ---
+        mainContainer = findViewById(R.id.main_container)
+        tvStatus = findViewById(R.id.tvStatus)
+        btnOpen = findViewById(R.id.btnOpen)
+        btnClose = findViewById(R.id.btnClose)
+        btnRescan = findViewById(R.id.btnRescan)
+        tvSecretHint = findViewById(R.id.tvSecretHint)
+        btnScanKey = findViewById(R.id.btnScanKey)
 
         val toolbar = findViewById<com.google.android.material.appbar.MaterialToolbar>(R.id.toolbar)
         toolbar.inflateMenu(R.menu.menu_main)
@@ -107,137 +89,60 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        val menuHost: MenuHost = this
-        menuHost.addMenuProvider(object : MenuProvider {
-            override fun onCreateMenu(menu: android.view.Menu, menuInflater: android.view.MenuInflater) {
-                menuInflater.inflate(R.menu.menu_main, menu)
-            }
 
-            override fun onMenuItemSelected(menuItem: android.view.MenuItem): Boolean {
-                return when (menuItem.itemId) {
-                    R.id.action_manage_secret -> {
-                        startActivity(Intent(this@MainActivity, ProvisionQrActivity::class.java))
-                        true
-                    }
-                    else -> false
-                }
-            }
-        }, this, Lifecycle.State.RESUMED)
-
-        mainContainer = findViewById(R.id.main_container)
-        tvStatus = findViewById(R.id.tvStatus)
-        btnOpen = findViewById(R.id.btnOpen)
-        btnClose = findViewById(R.id.btnClose)
-        btnExecute = findViewById(R.id.btnExecute)
-        btnRescan = findViewById(R.id.btnRescan)
-        tvSecretHint = findViewById(R.id.tvSecretHint)
-        btnScanKey = findViewById(R.id.btnScanKey)
-
-        btnScanKey.isVisible = false
-
-        btnScanKey.setOnClickListener { promptScan() }
-
-        btnExecute.setOnClickListener {
-            armedCommand?.let {
-                bleManager.sendSingleFrameCommand(it)
-            }
-            disarm()
-        }
-
+        // --- BLE Manager Initialization ---
         bleManager = BleManager(
             context = this,
             onStatusUpdate = { status ->
-                runOnUiThread {
-                    tvStatus.text = getString(R.string.connect_status, status)
-                }
+                tvStatus.text = getString(R.string.connect_status, status)
             },
-            onReady = { ready ->
-                runOnUiThread {
-                    val hasSecret = SecureHmacStore.exists(this)
-                    val enabled = ready && hasSecret
-                    if (!isArmed()) {
-                        btnOpen.isEnabled = enabled
-                        btnClose.isEnabled = enabled
-                        if (::openGuard.isInitialized) openGuard.setBusy(!enabled)
-                        if (::closeGuard.isInitialized) closeGuard.setBusy(!enabled)
-                    }
+            onReady = { isReady ->
+                // Single point of truth for button state
+                val hasSecret = SecureHmacStore.exists(this)
+                val enable = isReady && hasSecret
 
-                    if (ready) {
-                        mainContainer.setBackgroundColor(Color.parseColor("#A5D6A7")) // light green
-                    } else {
-                        mainContainer.setBackgroundResource(R.drawable.background_garage_door)
-                    }
+                btnOpen.isEnabled = enable
+                btnClose.isEnabled = enable
+
+                if (enable) {
+                    mainContainer.setBackgroundColor(Color.parseColor("#A5D6A7")) // light green
+                } else {
+                    mainContainer.setBackgroundResource(R.drawable.background_garage_door)
                 }
             },
-            onError = { msg -> runOnUiThread { tvStatus.text = "Status: $msg" } }
+            onError = { error ->
+                tvStatus.text = "ERROR: $error"
+                btnOpen.isEnabled = false
+                btnClose.isEnabled = false
+            }
         )
 
-        setupTapGuards()
+        // --- Button Listeners (Simplified) ---
+        btnOpen.setOnClickListener {
+            bleManager.sendSingleFrameCommand("CmdOpen")
+        }
 
-        refreshSecretState()
-        if (SecureHmacStore.exists(this)) {
-            tvStatus.text = getString(R.string.connect_status, "Scanning…")
-            bleManager.start()
-        } else {
-            tvStatus.text = getString(R.string.connect_status, "Please scan QR secret")
+        btnClose.setOnClickListener {
+            bleManager.sendSingleFrameCommand("CmdClose")
         }
 
         btnRescan.setOnClickListener {
-            disarm()
-            checkPermissionsAndStart()
+            startBleProcess() // Directly start the process
         }
 
+        btnScanKey.setOnClickListener {
+            qrLauncher.launch(Intent(this, ScanQrActivity::class.java))
+        }
+
+        // --- Initial State ---
+        refreshSecretState()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // When returning to the app, check permissions and start the scan if necessary.
+        // This is safe now because checkPermissionsAndStart is idempotent.
         checkPermissionsAndStart()
-    }
-
-    private fun isArmed(): Boolean = armedCommand != null
-
-    private fun arm(command: String) {
-        armedCommand = command
-        btnOpen.isEnabled = false
-        btnClose.isEnabled = false
-        btnExecute.isEnabled = true
-
-        // Automatically disarm after 5 seconds
-        disarmRunnable = Runnable { disarm() }
-        disarmRunnable?.let { armingHandler.postDelayed(it, 5000) }
-    }
-
-    private fun disarm() {
-        disarmRunnable?.let { armingHandler.removeCallbacks(it) }
-        disarmRunnable = null
-        armedCommand = null
-
-        // Re-enable buttons if BLE is ready
-        val bleReady = bleManager.isReady
-        btnOpen.isEnabled = bleReady
-        btnClose.isEnabled = bleReady
-        btnExecute.isEnabled = false
-
-        openGuard.reset()
-        closeGuard.reset()
-    }
-
-    private fun promptScan() {
-        val intent = Intent(this, ScanQrActivity::class.java)
-        qrLauncher.launch(intent)
-    }
-
-    private fun refreshSecretState() {
-        val hasSecret = SecureHmacStore.exists(this)
-        tvSecretHint.isVisible = !hasSecret
-        btnScanKey.isVisible = !hasSecret
-
-        if (!hasSecret) {
-            btnOpen.isEnabled = false
-            btnClose.isEnabled = false
-            disarm()
-        }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        disarm()
     }
 
     @SuppressLint("MissingPermission")
@@ -246,87 +151,47 @@ class MainActivity : ComponentActivity() {
         bleManager.stop()
     }
 
-    override fun onResume() {
-        super.onResume()
-        refreshSecretState()
-        disarm()
+    private fun refreshSecretState() {
+        val hasSecret = SecureHmacStore.exists(this)
+        tvSecretHint.isVisible = !hasSecret
+        btnScanKey.isVisible = !hasSecret
+
+        if (hasSecret) {
+            checkPermissionsAndStart()
+        } else {
+            // No secret, so disable buttons and stop BLE
+            btnOpen.isEnabled = false
+            btnClose.isEnabled = false
+            bleManager.stop()
+        }
     }
 
     private fun checkPermissionsAndStart() {
+        if (!SecureHmacStore.exists(this)) {
+            tvStatus.text = getString(R.string.connect_status, "Please scan QR secret")
+            return
+        }
+
         val missingPermissions = requiredPermissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }.toTypedArray()
 
         if (missingPermissions.isEmpty()) {
-            startBleProcess()
+            // ** CRITICAL FIX **
+            // Only start the process if the manager isn't already connected and ready.
+            // This prevents the connect/disconnect loop when the app is resumed.
+            if (!bleManager.isManagerReady) {
+                startBleProcess()
+            }
         } else {
-            tvStatus.text = "Requesting permissions..."
             requestPermissionLauncher.launch(missingPermissions)
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun startBleProcess() {
-        if (SecureHmacStore.exists(this)) {
-            bleManager.stop()
-            tvStatus.text = getString(R.string.connect_status, "Scanning…")
-            bleManager.start()
-        }
-    }
-
-    private fun setupTapGuards() {
-        openGuard = TripleTapGuard(
-            button = btnOpen,
-            requiredTaps = 3,
-            windowMs = 2500,
-            onArmed = {
-                arm("CmdOpen")
-            },
-            onUpdateStatus = { s ->
-                runOnUiThread {
-                    tvStatus.text = getString(R.string.connect_status, s)
-                }
-            }
-        ).also { it.attach() }
-
-        closeGuard = TripleTapGuard(
-            button = btnClose,
-            requiredTaps = 3,
-            windowMs = 2500,
-            onArmed = {
-                arm("CmdClose")
-            },
-            onUpdateStatus = { s ->
-                runOnUiThread {
-                    tvStatus.text = getString(R.string.connect_status, s)
-                }
-            }
-        ).also { it.attach() }
-    }
-
-    private fun ensureBlePermissions(onGranted: () -> Unit) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val need = mutableListOf<String>()
-            if (checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED)
-                need += Manifest.permission.BLUETOOTH_SCAN
-            if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)
-                need += Manifest.permission.BLUETOOTH_CONNECT
-            if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
-                need += Manifest.permission.ACCESS_FINE_LOCATION
-
-            if (need.isNotEmpty()) {
-                requestPermissions(need.toTypedArray(), 1001)
-            } else onGranted()
-        } else {
-            val need = mutableListOf<String>()
-            if (checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED)
-                need += Manifest.permission.ACCESS_COARSE_LOCATION
-            if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
-                need += Manifest.permission.ACCESS_FINE_LOCATION
-
-            if (need.isNotEmpty()) {
-                requestPermissions(need.toTypedArray(), 1000)
-            } else onGranted()
-        }
+        // Always stop and start to ensure a clean state
+        bleManager.stop()
+        bleManager.start()
     }
 }
