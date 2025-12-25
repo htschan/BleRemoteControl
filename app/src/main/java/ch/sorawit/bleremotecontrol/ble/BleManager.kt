@@ -77,7 +77,7 @@ class BleManager(
     fun sendSingleFrameCommand(command: String) {
         val nonceHex = latestNonceHex
         val canWrite = (writeChar != null && gatt != null)
-        val fresh = nonceHex != null && (System.currentTimeMillis() - lastNonceMs) <= 10_000
+        val fresh = nonceHex != null && (System.currentTimeMillis() - lastNonceMs) <= 60_000
         if (!canWrite) { postError("Not connected"); return }
         if (!fresh) { postError("No fresh nonce yet"); return }
 
@@ -87,13 +87,9 @@ class BleManager(
             return
         }
 
-        val macHex = try {
-            hmac8Hex("$command|$nonceHex", keyBytes)
-        } finally {
-            keyBytes.fill(0)
-        }
-
+        val macHex = hmac8Hex("$command|$nonceHex", keyBytes)
         val frame = "F|$command|$nonceHex|$macHex"
+        keyBytes.fill(0)  // Clear after use
         isAwaitingNonceAfterCommand = true
         writeFrame(frame)
 
@@ -334,7 +330,7 @@ class BleManager(
     }
 
     private fun processNotifyValue(value: ByteArray) {
-        val s = value.toString(Charsets.UTF_8).trim()
+        val s = value.toString(Charsets.UTF_8).replace("\u0000", "").trim()
         if (s.isNotEmpty()) {
             latestNonceHex = s
             lastNonceMs = System.currentTimeMillis()
