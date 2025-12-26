@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.widget.Button
 import android.widget.RelativeLayout
 import android.widget.TextView
@@ -16,6 +18,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import ch.sorawit.bleremotecontrol.ble.BleManager
 import ch.sorawit.bleremotecontrol.security.SecureHmacStore
+import ch.sorawit.bleremotecontrol.util.TripleTapGuard
 
 class MainActivity : ComponentActivity() {
 
@@ -23,11 +26,20 @@ class MainActivity : ComponentActivity() {
     private lateinit var tvStatus: TextView
     private lateinit var btnOpen: Button
     private lateinit var btnClose: Button
+    private lateinit var btnExecute: Button
     private lateinit var btnRescan: Button
 
     private lateinit var bleManager: BleManager
     private lateinit var tvSecretHint: TextView
     private lateinit var btnScanKey: Button
+
+    private lateinit var openGuard: TripleTapGuard
+    private lateinit var closeGuard: TripleTapGuard
+
+    private var armedCommand: String? = null
+    private val armingHandler = Handler(Looper.getMainLooper())
+    private var disarmRunnable: Runnable? = null
+
 
     // --- PERMISSION HANDLING ---
     private val requiredPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -73,6 +85,7 @@ class MainActivity : ComponentActivity() {
         tvStatus = findViewById(R.id.tvStatus)
         btnOpen = findViewById(R.id.btnOpen)
         btnClose = findViewById(R.id.btnClose)
+        btnExecute = findViewById(R.id.btnExecute)
         btnRescan = findViewById(R.id.btnRescan)
         tvSecretHint = findViewById(R.id.tvSecretHint)
         btnScanKey = findViewById(R.id.btnScanKey)
@@ -97,37 +110,30 @@ class MainActivity : ComponentActivity() {
                 tvStatus.text = getString(R.string.connect_status, status)
             },
             onReady = { isReady ->
-                // Single point of truth for button state
-                val hasSecret = SecureHmacStore.exists(this)
-                val enable = isReady && hasSecret
-
-                btnOpen.isEnabled = enable
-                btnClose.isEnabled = enable
-
-                if (enable) {
+                if (isReady) {
                     mainContainer.setBackgroundColor(Color.parseColor("#A5D6A7")) // light green
                 } else {
                     mainContainer.setBackgroundResource(R.drawable.background_garage_door)
                 }
+                updateButtonStates()
             },
             onError = { error ->
                 tvStatus.text = "ERROR: $error"
-                btnOpen.isEnabled = false
-                btnClose.isEnabled = false
+                updateButtonStates()
             }
         )
 
-        // --- Button Listeners (Simplified) ---
-        btnOpen.setOnClickListener {
-            bleManager.sendSingleFrameCommand("CmdOpen")
-        }
-
-        btnClose.setOnClickListener {
-            bleManager.sendSingleFrameCommand("CmdClose")
+        // --- Button Listeners ---
+        btnExecute.setOnClickListener {
+            armedCommand?.let {
+                bleManager.sendSingleFrameCommand(it)
+            }
+            disarm()
         }
 
         btnRescan.setOnClickListener {
-            startBleProcess() // Directly start the process
+            disarm() // Disarm before starting a new scan
+            startBleProcess()
         }
 
         btnScanKey.setOnClickListener {
@@ -135,13 +141,13 @@ class MainActivity : ComponentActivity() {
         }
 
         // --- Initial State ---
+        setupTapGuards()
         refreshSecretState()
     }
 
     override fun onResume() {
         super.onResume()
-        // When returning to the app, check permissions and start the scan if necessary.
-        // This is safe now because checkPermissionsAndStart is idempotent.
+        disarm() // Always disarm when coming back to the app for safety
         checkPermissionsAndStart()
     }
 
@@ -159,11 +165,9 @@ class MainActivity : ComponentActivity() {
         if (hasSecret) {
             checkPermissionsAndStart()
         } else {
-            // No secret, so disable buttons and stop BLE
-            btnOpen.isEnabled = false
-            btnClose.isEnabled = false
             bleManager.stop()
         }
+        updateButtonStates()
     }
 
     private fun checkPermissionsAndStart() {
@@ -177,9 +181,6 @@ class MainActivity : ComponentActivity() {
         }.toTypedArray()
 
         if (missingPermissions.isEmpty()) {
-            // ** CRITICAL FIX **
-            // Only start the process if the manager isn't already connected and ready.
-            // This prevents the connect/disconnect loop when the app is resumed.
             if (!bleManager.isManagerReady) {
                 startBleProcess()
             }
@@ -190,8 +191,58 @@ class MainActivity : ComponentActivity() {
 
     @SuppressLint("MissingPermission")
     private fun startBleProcess() {
-        // Always stop and start to ensure a clean state
         bleManager.stop()
         bleManager.start()
+    }
+
+    // --- Triple Tap Logic ---
+
+    private fun isArmed(): Boolean = armedCommand != null
+
+    private fun arm(command: String) {
+        armedCommand = command
+        updateButtonStates()
+        disarmRunnable = Runnable { disarm() }
+        armingHandler.postDelayed(disarmRunnable!!, 5000)
+    }
+
+    private fun disarm() {
+        disarmRunnable?.let { armingHandler.removeCallbacks(it) }
+        disarmRunnable = null
+        armedCommand = null
+        updateButtonStates()
+        openGuard.reset()
+        closeGuard.reset()
+    }
+
+    private fun updateButtonStates() {
+        val isBleReady = bleManager.isManagerReady
+        val hasSecret = SecureHmacStore.exists(this)
+        val isCurrentlyArmed = isArmed()
+
+        btnOpen.isEnabled = isBleReady && hasSecret && !isCurrentlyArmed
+        btnClose.isEnabled = isBleReady && hasSecret && !isCurrentlyArmed
+        btnExecute.isEnabled = isCurrentlyArmed
+
+        if (::openGuard.isInitialized) openGuard.setBusy(!isBleReady || isCurrentlyArmed)
+        if (::closeGuard.isInitialized) closeGuard.setBusy(!isBleReady || isCurrentlyArmed)
+    }
+
+    private fun setupTapGuards() {
+        openGuard = TripleTapGuard(
+            button = btnOpen,
+            requiredTaps = 3,
+            windowMs = 2500,
+            onArmed = { arm("CmdOpen") },
+            onUpdateStatus = { s -> tvStatus.text = getString(R.string.connect_status, s) }
+        ).also { it.attach() }
+
+        closeGuard = TripleTapGuard(
+            button = btnClose,
+            requiredTaps = 3,
+            windowMs = 2500,
+            onArmed = { arm("CmdClose") },
+            onUpdateStatus = { s -> tvStatus.text = getString(R.string.connect_status, s) }
+        ).also { it.attach() }
     }
 }
